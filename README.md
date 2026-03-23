@@ -1,84 +1,89 @@
-# Yatriso Foundation
+# Yatriso
 
-Yatriso is a Cloudflare-first taxi platform foundation for college and work travelers.  
-This repository contains:
+Yatriso is a no-signup taxi platform MVP for college and work travelers, designed to run mostly on Cloudflare with ephemeral ride state.
 
-- `apps/web`: Rider and Driver web app (React + Vite + MapLibre)
-- `workers/api`: Realtime API with Durable Objects for active rides
+## Included apps
 
-## Product assumptions (MVP)
+- `apps/web` - React + Vite rider/driver web app
+- `workers/api` - Cloudflare Worker + Durable Object realtime backend
 
-- No signup required
-- Rider enters destination and requests a ride
-- Driver accepts ride
-- Rider sees live driver location and ETA placeholder
-- Data is ephemeral and scoped to active rides
+## Current MVP features
 
-## Tech stack
+- Rider: current location + destination address input
+- Destination geocoding via free OpenStreetMap Nominatim API
+- Ride request creation and ride ID sharing
+- Driver: join ride by ride ID, accept ride, send live location
+- Rider: live driver tracking and pickup ETA
+- Ride completion endpoint
+- Automatic ride expiry via Durable Object alarm (2 hours)
 
-- Cloudflare Pages for frontend hosting
-- Cloudflare Workers + Durable Objects for realtime ride session state
-- MapLibre + OpenStreetMap tiles for map rendering
-- GitHub for source control and CI integration with Cloudflare
+## Local development
 
-## Quick start
-
-### 1) Install dependencies
+### Install dependencies
 
 ```bash
 npm install
 ```
 
-### 2) Run frontend
-
-```bash
-npm run dev:web
-```
-
-### 3) Run worker locally
+### Start backend (Worker)
 
 ```bash
 npm run dev:api
 ```
 
-## Cloudflare deployment
+### Start frontend
 
-### Frontend (Pages)
+```bash
+cp apps/web/.env.example apps/web/.env
+npm run dev:web
+```
 
-- Connect this repo to Cloudflare Pages
-- Build command: `npm run build:web`
-- Build output: `apps/web/dist`
-- Env var for frontend:
-  - `VITE_API_BASE_URL=https://api.yourdomain.com`
+## API routes
 
-### API (Workers)
+- `GET /health`
+- `GET /geocode?q=address`
+- `GET /eta?fromLat=&fromLng=&toLat=&toLng=`
+- `POST /rides`
+- `GET /rides/:rideId`
+- `POST /rides/:rideId/accept`
+- `POST /rides/:rideId/location`
+- `POST /rides/:rideId/complete`
+- `GET /ws/ride/:rideId?role=rider|driver`
 
-Inside `workers/api`, deploy:
+## Deploy and host on Cloudflare
+
+### 1) Deploy Worker API
+
+From repo root:
 
 ```bash
 npm run deploy:api
 ```
 
-Then map a route like:
+In Cloudflare dashboard, set route:
 
-- `api.yourdomain.com/*` -> `yatriso-api` worker
+- `api.yourdomain.com/*` -> `yatriso-api`
 
-## API overview
+### 2) Deploy Frontend with Pages
 
-- `POST /rides` create new ride request
-- `POST /rides/:rideId/accept` driver accepts ride
-- `POST /rides/:rideId/location` driver pushes current location
-- `GET /rides/:rideId` fetch current ride snapshot
-- `GET /ws/ride/:rideId?role=rider|driver` realtime websocket channel
+In Cloudflare Pages:
 
-## Security and abuse controls (recommended next)
+- Connect GitHub repo: `TheRitikYadav/Yatriso`
+- Framework preset: `Vite`
+- Build command: `npm run build:web`
+- Build output directory: `apps/web/dist`
+- Environment variable:
+  - `VITE_API_BASE_URL=https://api.yourdomain.com`
 
-- Add Cloudflare Turnstile in frontend
-- Add per-IP rate limiting in Worker
-- Add city/geofence validation
-- Add ride expiry + cleanup policy
+Set Pages custom domain:
 
-## Notes
+- `app.yourdomain.com`
 
-- This is a foundation, not production-ready dispatch logic.
-- Public free geocoding/routing APIs can be rate limited.
+### 3) DNS expected end state
+
+- `app.yourdomain.com` -> Cloudflare Pages project
+- `api.yourdomain.com` -> Worker route
+
+## Free API note
+
+This MVP uses free public endpoints for geocoding and routing. They can be rate-limited. For production scale, move to managed or self-hosted geocoding/routing.
