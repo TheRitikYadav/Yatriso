@@ -89,7 +89,7 @@ function locationKey(coords: Coordinates | null) {
 }
 
 function App() {
-  const [role, setRole] = useState<Role>("rider");
+  const [role, setRole] = useState<Role | null>(null);
   const [rideId, setRideId] = useState("");
   const [destinationText, setDestinationText] = useState("");
   const [destinationLocation, setDestinationLocation] = useState<Coordinates | null>(null);
@@ -124,6 +124,9 @@ function App() {
     if (riderLocation) return [riderLocation.lng, riderLocation.lat];
     return [-97.0403, 32.8998];
   }, [driverLocation, destinationLocation, riderLocation]);
+
+  const hasRequiredLocation =
+    role === "rider" ? Boolean(riderLocation) : role === "driver" ? Boolean(driverLocation) : false;
 
   const googleMapsLink = useMemo(() => {
     const params = new URLSearchParams({ api: "1", travelmode: "driving" });
@@ -325,16 +328,25 @@ function App() {
 
   async function useBrowserLocation() {
     setError("");
+    if (!role) {
+      setError("Choose Rider or Driver first.");
+      return;
+    }
     if (!navigator.geolocation) {
       setError("Geolocation is not available in this browser.");
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        setRiderLocation({
+        const coords = {
           lat: position.coords.latitude,
           lng: position.coords.longitude
-        });
+        };
+        if (role === "rider") {
+          setRiderLocation(coords);
+        } else {
+          setDriverLocation(coords);
+        }
       },
       () => setError("Unable to fetch your current location."),
       { enableHighAccuracy: true, timeout: 10_000 }
@@ -407,6 +419,10 @@ function App() {
   async function acceptRide() {
     try {
       setError("");
+      if (!driverLocation) {
+        setError("Driver location is required before accepting rides.");
+        return;
+      }
       let targetRideId = rideId.trim();
       if (!targetRideId) {
         const next = await requestJSON<{ rideId: string; status: string }>(
@@ -581,21 +597,30 @@ function App() {
           <p>No-signup ride booking with live tracking and fast dispatch for work and college rides.</p>
         </div>
         <div className="row controls-row">
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as Role)}
-            aria-label="Select role"
-          >
-            <option value="rider">Rider</option>
-            <option value="driver">Driver</option>
-          </select>
+          {!role ? (
+            <>
+              <button onClick={() => setRole("rider")}>I am Rider</button>
+              <button onClick={() => setRole("driver")}>I am Driver</button>
+            </>
+          ) : (
+            <>
+              <span className="pill">Role: {role}</span>
+              <button className="button-secondary" onClick={() => setRole(null)}>
+                Change role
+              </button>
+            </>
+          )}
           <span className={`pill status-${status}`}>{status}</span>
           {rideId ? <span className="pill">Ride: {rideId}</span> : null}
         </div>
       </div>
 
       <div className="panel">
-        {role === "rider" ? (
+        {role === null ? (
+          <div className="meta">
+            Select role first, then tap <strong>Use my location</strong> to continue.
+          </div>
+        ) : role === "rider" ? (
           <div className="row controls-row">
             <button onClick={useBrowserLocation}>Use my location</button>
             <input
@@ -603,10 +628,10 @@ function App() {
               onChange={(e) => setDestinationText(e.target.value)}
               placeholder="Destination address"
             />
-            <button onClick={geocodeDestination} disabled={loading}>
+            <button onClick={geocodeDestination} disabled={loading || !hasRequiredLocation}>
               {loading ? "Locating..." : "Locate destination"}
             </button>
-            <button onClick={createRide} disabled={loading}>
+            <button onClick={createRide} disabled={loading || !hasRequiredLocation}>
               {loading ? "Requesting..." : "Request ride"}
             </button>
             <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
@@ -615,7 +640,10 @@ function App() {
           </div>
         ) : (
           <div className="row controls-row">
-            <button onClick={acceptRide}>Accept next ride</button>
+            <button onClick={useBrowserLocation}>Use my location</button>
+            <button onClick={acceptRide} disabled={!hasRequiredLocation}>
+              Accept next ride
+            </button>
             <button onClick={completeRide}>Complete ride</button>
             <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
               Cancel ride
