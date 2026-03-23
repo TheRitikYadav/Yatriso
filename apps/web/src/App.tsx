@@ -384,10 +384,12 @@ function App() {
 
   return (
     <div className="container">
-      <div className="panel">
-        <h1>Yatriso</h1>
-        <p>No-signup ride booking with live driver tracking and ETA.</p>
-        <div className="row">
+      <div className="panel hero">
+        <div>
+          <h1>Yatriso</h1>
+          <p>No-signup ride booking with live tracking and fast dispatch for work and college rides.</p>
+        </div>
+        <div className="row controls-row">
           <select
             value={role}
             onChange={(e) => setRole(e.target.value as Role)}
@@ -401,15 +403,15 @@ function App() {
             onChange={(e) => setRideId(e.target.value)}
             placeholder="Ride ID"
           />
-          <button onClick={joinRide}>Join</button>
+          <button onClick={joinRide}>Join ride</button>
           <span className={`pill status-${status}`}>{status}</span>
         </div>
       </div>
 
       <div className="panel">
         {role === "rider" ? (
-          <div className="row">
-            <button onClick={useBrowserLocation}>Use current location</button>
+          <div className="row controls-row">
+            <button onClick={useBrowserLocation}>Use my location</button>
             <input
               value={destinationText}
               onChange={(e) => setDestinationText(e.target.value)}
@@ -423,21 +425,42 @@ function App() {
             </button>
           </div>
         ) : (
-          <div className="row">
+          <div className="row controls-row">
             <button onClick={acceptRide}>Accept ride</button>
             <button onClick={completeRide}>Complete ride</button>
           </div>
         )}
-        <div className="meta">
-          Rider: {riderLocation ? `${riderLocation.lat}, ${riderLocation.lng}` : "n/a"} | Driver:{" "}
-          {driverLocation ? `${driverLocation.lat}, ${driverLocation.lng}` : "n/a"}
-        </div>
-        <div className="meta">
-          Destination: {destinationLocation ? `${destinationLocation.lat}, ${destinationLocation.lng}` : "n/a"}
-        </div>
-        <div className="meta">
-          Driver ETA to pickup: {etaMinutes !== null ? `${etaMinutes} min` : "n/a"} | Rider trip distance:{" "}
-          {distanceMeters !== null ? `${(distanceMeters / 1000).toFixed(1)} km` : "n/a"}
+        <div className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-label">Rider</div>
+            <div className="stat-value">
+              {riderLocation ? `${riderLocation.lat.toFixed(5)}, ${riderLocation.lng.toFixed(5)}` : "n/a"}
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Driver</div>
+            <div className="stat-value">
+              {driverLocation ? `${driverLocation.lat.toFixed(5)}, ${driverLocation.lng.toFixed(5)}` : "n/a"}
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Destination</div>
+            <div className="stat-value">
+              {destinationLocation
+                ? `${destinationLocation.lat.toFixed(5)}, ${destinationLocation.lng.toFixed(5)}`
+                : "n/a"}
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Driver ETA</div>
+            <div className="stat-value">{etaMinutes !== null ? `${etaMinutes} min` : "n/a"}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Trip Distance</div>
+            <div className="stat-value">
+              {distanceMeters !== null ? `${(distanceMeters / 1000).toFixed(1)} km` : "n/a"}
+            </div>
+          </div>
         </div>
         {geocodeOptions.length > 0 ? (
           <div className="meta">
