@@ -10,7 +10,8 @@
   "scripts": {
     "dev:web": "npm run dev -w apps/web",
     "build:web": "npm run build -w apps/web",
-    "dev:api": "npm run dev -w workers/api",
-    "deploy:api": "npm run deploy -w workers/api"
+    "dev:api": "wrangler dev -c workers/api/wrangler.toml",
+    "deploy:api": "wrangler deploy -c workers/api/wrangler.toml",
+    "deploy:api:ci": "npx wrangler deploy -c workers/api/wrangler.toml"
   }
 }
