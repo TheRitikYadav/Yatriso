@@ -402,7 +402,7 @@ function App() {
             placeholder="Ride ID"
           />
           <button onClick={joinRide}>Join</button>
-          <span className="pill">{status}</span>
+          <span className={`pill status-${status}`}>{status}</span>
         </div>
       </div>
 

@@ -81,9 +81,30 @@ button:disabled {
 
 .pill {
   display: inline-block;
-  padding: 3px 8px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: #1d4ed8;
+  border: 1px solid transparent;
+  font-weight: 600;
+  text-transform: capitalize;
   font-size: 12px;
   margin-left: 8px;
+}
+
+.status-requested {
+  background: rgba(234, 179, 8, 0.16);
+  border-color: rgba(234, 179, 8, 0.45);
+  color: #fef08a;
+}
+
+.status-accepted {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #bfdbfe;
+}
+
+.status-completed {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #a7f3d0;
 }
