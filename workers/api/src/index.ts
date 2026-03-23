@@ -212,6 +212,32 @@ export default {
       });
     }
 
+    if (request.method === "GET" && url.pathname === "/reverse-geocode") {
+      const lat = parseCoordinate(url.searchParams.get("lat"));
+      const lng = parseCoordinate(url.searchParams.get("lng"));
+      if (lat === null || lng === null) {
+        return json({ error: "missing_or_invalid_coordinates" }, { status: 400 });
+      }
+      const reverseURL = new URL("https://nominatim.openstreetmap.org/reverse");
+      reverseURL.searchParams.set("format", "jsonv2");
+      reverseURL.searchParams.set("lat", String(lat));
+      reverseURL.searchParams.set("lon", String(lng));
+      const reverseRes = await fetch(reverseURL, {
+        headers: {
+          "User-Agent": "Yatriso/0.1 (Cloudflare Worker Reverse Geocoder)"
+        }
+      });
+      if (!reverseRes.ok) {
+        return json({ error: "reverse_geocoding_failed" }, { status: 502 });
+      }
+      const payload = (await reverseRes.json()) as {
+        display_name?: string;
+      };
+      return json({
+        label: payload.display_name ?? "Unknown location"
+      });
+    }
+
     if (request.method === "GET" && url.pathname === "/eta") {
       const fromLat = parseCoordinate(url.searchParams.get("fromLat"));
       const fromLng = parseCoordinate(url.searchParams.get("fromLng"));

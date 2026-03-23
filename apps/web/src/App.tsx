@@ -72,16 +72,35 @@ async function fetchETA(from: Coordinates, to: Coordinates) {
   }>(`/eta?${params.toString()}`);
 }
 
+async function fetchLocationName(coords: Coordinates) {
+  const params = new URLSearchParams({
+    lat: String(coords.lat),
+    lng: String(coords.lng)
+  });
+  const response = await requestJSON<{ label: string }>(
+    `/reverse-geocode?${params.toString()}`
+  );
+  return response.label;
+}
+
+function locationKey(coords: Coordinates | null) {
+  if (!coords) return "";
+  return `${coords.lat.toFixed(3)},${coords.lng.toFixed(3)}`;
+}
+
 function App() {
   const [role, setRole] = useState<Role>("rider");
   const [rideId, setRideId] = useState("");
   const [destinationText, setDestinationText] = useState("");
   const [destinationLocation, setDestinationLocation] = useState<Coordinates | null>(null);
+  const [destinationName, setDestinationName] = useState("Not set");
   const [geocodeOptions, setGeocodeOptions] = useState<
     Array<{ label: string; lat: number; lng: number }>
   >([]);
   const [riderLocation, setRiderLocation] = useState<Coordinates | null>(null);
+  const [riderLocationName, setRiderLocationName] = useState("Not shared yet");
   const [driverLocation, setDriverLocation] = useState<Coordinates | null>(null);
+  const [driverLocationName, setDriverLocationName] = useState("Waiting for driver");
   const [status, setStatus] = useState<RideState["status"]>("requested");
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
@@ -203,6 +222,67 @@ function App() {
   }, [destinationLocation]);
 
   useEffect(() => {
+    const key = locationKey(riderLocation);
+    if (!key) {
+      setRiderLocationName("Not shared yet");
+      return;
+    }
+    let cancelled = false;
+    void fetchLocationName(riderLocation as Coordinates)
+      .then((label) => {
+        if (!cancelled) setRiderLocationName(label);
+      })
+      .catch(() => {
+        if (!cancelled) setRiderLocationName("Location available");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [riderLocation?.lat, riderLocation?.lng]);
+
+  useEffect(() => {
+    const key = locationKey(driverLocation);
+    if (!key) {
+      setDriverLocationName("Waiting for driver");
+      return;
+    }
+    let cancelled = false;
+    void fetchLocationName(driverLocation as Coordinates)
+      .then((label) => {
+        if (!cancelled) setDriverLocationName(label);
+      })
+      .catch(() => {
+        if (!cancelled) setDriverLocationName("Driver location available");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [driverLocation?.lat, driverLocation?.lng]);
+
+  useEffect(() => {
+    if (destinationText.trim()) {
+      setDestinationName(destinationText.trim());
+      return;
+    }
+    const key = locationKey(destinationLocation);
+    if (!key) {
+      setDestinationName("Not set");
+      return;
+    }
+    let cancelled = false;
+    void fetchLocationName(destinationLocation as Coordinates)
+      .then((label) => {
+        if (!cancelled) setDestinationName(label);
+      })
+      .catch(() => {
+        if (!cancelled) setDestinationName("Destination set");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [destinationText, destinationLocation?.lat, destinationLocation?.lng]);
+
+  useEffect(() => {
     let cancelled = false;
     if (!rideId || status === "completed" || status === "cancelled") return;
     if (!riderLocation || !destinationLocation) return;
@@ -282,6 +362,7 @@ function App() {
           lat: response.results[0].lat,
           lng: response.results[0].lng
         });
+        setDestinationName(response.results[0].label);
       }
       if (!response.results.length) {
         setError("No matching destination found.");
@@ -390,6 +471,7 @@ function App() {
         setRiderLocation(message.payload.riderLocation);
         setDestinationText(message.payload.destinationText);
         setDestinationLocation(message.payload.destinationLocation);
+        setDestinationName(message.payload.destinationText || "Destination set");
       }
       if (message.type === "driver_location") {
         setDriverLocation(message.payload);
@@ -543,32 +625,24 @@ function App() {
         <div className="stats-grid">
           <div className="stat-card">
             <div className="stat-label">Rider</div>
-            <div className="stat-value">
-              {riderLocation ? `${riderLocation.lat.toFixed(5)}, ${riderLocation.lng.toFixed(5)}` : "n/a"}
-            </div>
+            <div className="stat-value">{riderLocationName}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Driver</div>
-            <div className="stat-value">
-              {driverLocation ? `${driverLocation.lat.toFixed(5)}, ${driverLocation.lng.toFixed(5)}` : "n/a"}
-            </div>
+            <div className="stat-value">{driverLocationName}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Destination</div>
-            <div className="stat-value">
-              {destinationLocation
-                ? `${destinationLocation.lat.toFixed(5)}, ${destinationLocation.lng.toFixed(5)}`
-                : "n/a"}
-            </div>
+            <div className="stat-value">{destinationName}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Driver ETA</div>
-            <div className="stat-value">{etaMinutes !== null ? `${etaMinutes} min` : "n/a"}</div>
+            <div className="stat-value">{etaMinutes !== null ? `${etaMinutes} min` : "Calculating..."}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Trip Distance</div>
             <div className="stat-value">
-              {distanceMeters !== null ? `${(distanceMeters / 1000).toFixed(1)} km` : "n/a"}
+              {distanceMeters !== null ? `${(distanceMeters / 1000).toFixed(1)} km` : "Calculating..."}
             </div>
           </div>
         </div>
