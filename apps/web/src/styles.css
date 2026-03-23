@@ -146,12 +146,13 @@ body {
 }
 
 .app-header.floating {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  background: rgba(6, 13, 26, 0.82);
+  background: rgba(6, 13, 26, 0.88);
   border-bottom: 1px solid var(--border);
+  z-index: 30;
 }
 
 .header-role {
@@ -509,7 +510,7 @@ body {
 
 /* ── Map pages ──────────────────────────────────────────────────────────────── */
 
-.map-page { position: relative; }
+.map-page { position: relative; overflow: hidden; height: 100dvh; }
 
 .map-fullscreen {
   position: fixed;
@@ -694,6 +695,11 @@ body {
   font-size: 13px;
   color: #fca5a5;
   margin-top: 10px;
+}
+
+.error-top {
+  margin: 10px 16px 0;
+  border-radius: 12px;
 }
 
 /* ── Map markers ────────────────────────────────────────────────────────────── */

@@ -164,6 +164,7 @@ function App() {
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const [requestedAt, setRequestedAt] = useState("");
@@ -177,6 +178,14 @@ function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const riderWatchIdRef = useRef<number | null>(null);
   const driverWatchIdRef = useRef<number | null>(null);
+  // Track highest committed status so WebSocket can never downgrade the screen.
+  const statusOrderRef = useRef<Record<RideState["status"], number>>({
+    requested: 0,
+    accepted: 1,
+    completed: 2,
+    cancelled: 2
+  });
+  const committedStatusRef = useRef<RideState["status"]>("requested");
 
   const hasRequiredLocation = role === "rider" ? locationGranted && Boolean(riderLocation) : role === "driver" ? locationGranted && Boolean(driverLocation) : false;
 
@@ -333,9 +342,6 @@ function App() {
   useEffect(() => {
     if (!mapRef.current || !driverLocation) return;
     if (!driverMarkerRef.current) {
-      const el = document.createElement("div");
-      el.className = "marker-driver";
-      riderMarkerRef.current = new maplibregl.Marker({ element: el });
       driverMarkerRef.current = new maplibregl.Marker({ color: "#f59e0b" });
       driverMarkerRef.current.setPopup(new maplibregl.Popup().setText("Driver"));
     }
@@ -516,10 +522,12 @@ function App() {
   }
 
   async function acceptRide(selectedRideId?: string) {
+    if (accepting) return;
     try {
       setError("");
-      if (!driverLocation) { setError("Driver location required."); return; }
-      if (!driverProfile) { setError("Driver profile not ready."); return; }
+      setAccepting(true);
+      if (!driverLocation) { setError("Share your location first."); return; }
+      if (!driverProfile) { setError("Driver profile not ready. Change role to driver again."); return; }
       let targetRideId = selectedRideId?.trim() || "";
       if (!targetRideId) {
         const next = await requestJSON<{ rideId: string }>("/rides/accept-next", {
@@ -533,6 +541,7 @@ function App() {
           body: JSON.stringify({ driverId: driverProfile.id, driverName: driverProfile.name })
         });
       }
+      committedStatusRef.current = "accepted";
       setRideId(targetRideId);
       setStatus("accepted");
       setOpenRides([]);
@@ -543,6 +552,7 @@ function App() {
       const message = (err as Error).message;
       if (message.startsWith("driver_busy:")) {
         const existingRideId = message.split(":")[1];
+        committedStatusRef.current = "accepted";
         setRideId(existingRideId);
         setStatus("accepted");
         connectRideSocket(existingRideId, "driver");
@@ -550,6 +560,8 @@ function App() {
         return;
       }
       setError(message);
+    } finally {
+      setAccepting(false);
     }
   }
 
@@ -557,6 +569,7 @@ function App() {
     try {
       if (!rideId) return;
       await requestJSON(`/rides/${rideId}/complete`, { method: "POST" });
+      committedStatusRef.current = "completed";
       setStatus("completed");
       setEtaMinutes(null);
       stopLocationSharing();
@@ -570,6 +583,7 @@ function App() {
     try {
       if (!rideId) return;
       await requestJSON(`/rides/${rideId}/cancel`, { method: "POST" });
+      committedStatusRef.current = "cancelled";
       setStatus("cancelled");
       stopLocationSharing();
       socketRef.current?.close();
@@ -587,7 +601,14 @@ function App() {
         | { type: "driver_location"; payload: Coordinates }
         | { type: "rider_location"; payload: Coordinates };
       if (message.type === "state") {
-        setStatus(message.payload.status);
+        // Only advance status, never downgrade (prevents race where the
+        // server's initial-connect state arrives after local accept/complete).
+        const incoming = statusOrderRef.current[message.payload.status] ?? 0;
+        const committed = statusOrderRef.current[committedStatusRef.current] ?? 0;
+        if (incoming >= committed) {
+          committedStatusRef.current = message.payload.status;
+          setStatus(message.payload.status);
+        }
         setRequestedAt(message.payload.createdAt || "");
         setDriverLocation(message.payload.driverLocation);
         setRiderLocation(message.payload.riderLocation);
@@ -879,6 +900,7 @@ function App() {
           <span className="header-location">📍 {driverLocationName}</span>
           <button className="btn-ghost-sm" onClick={() => { setRole(null); setLocationGranted(false); }}>Change</button>
         </header>
+        {error ? <div className="error-box error-top">{error}</div> : null}
         <div className="rides-list-header">
           <h2 className="rides-title">Available Rides</h2>
           <button className="btn-refresh" onClick={() => void loadOpenRides()} disabled={openRidesLoading}>
@@ -915,14 +937,17 @@ function App() {
                     </span>
                   </div>
                 </div>
-                <button className="btn-accept" onClick={() => void acceptRide(ride.rideId)}>
-                  Accept
+                <button
+                  className="btn-accept"
+                  onClick={() => void acceptRide(ride.rideId)}
+                  disabled={accepting}
+                >
+                  {accepting ? "..." : "Accept"}
                 </button>
               </div>
             ))}
           </div>
         )}
-        {error ? <div className="error-box">{error}</div> : null}
       </div>
     );
   }
