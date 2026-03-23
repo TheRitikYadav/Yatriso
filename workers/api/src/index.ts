@@ -21,6 +21,12 @@ type RideState = {
   expiresAt: string;
 };
 
+type OpenRideEntry = {
+  rideId: string;
+  requestedAt: string;
+  expiresAt: string;
+};
+
 type SocketRole = "rider" | "driver";
 
 const corsHeaders = {
@@ -88,12 +94,16 @@ export default {
           destinationLocation: payload.destinationLocation ?? null,
           destinationText: payload.destinationText ?? "",
           createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+          expiresAt: new Date(Date.now() + 45 * 60 * 1000).toISOString()
         })
       });
       await dispatchStub(env).fetch("https://dispatch/add-open", {
         method: "POST",
-        body: JSON.stringify({ rideId })
+        body: JSON.stringify({
+          rideId,
+          requestedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 45 * 60 * 1000).toISOString()
+        })
       });
       return json({ rideId, status: "requested" });
     }
@@ -142,16 +152,36 @@ export default {
       if (!assign.ok) return assign;
 
       const dispatch = dispatchStub(env);
-      const next = await dispatch.fetch("https://dispatch/next-open");
-      if (!next.ok) {
+      let rideId = "";
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        const next = await dispatch.fetch("https://dispatch/next-open");
+        if (!next.ok) {
+          await dispatch.fetch("https://dispatch/release-driver", {
+            method: "POST",
+            body: JSON.stringify({ driverId: payload.driverId })
+          });
+          return next;
+        }
+        const nextData = (await next.json()) as { rideId: string };
+        const candidateRideId = nextData.rideId;
+        const candidateStateRes = await roomStub(env, candidateRideId).fetch("https://room/state");
+        if (!candidateStateRes.ok) {
+          continue;
+        }
+        const candidateState = (await candidateStateRes.json()) as RideState;
+        if (candidateState.status !== "requested") {
+          continue;
+        }
+        rideId = candidateRideId;
+        break;
+      }
+      if (!rideId) {
         await dispatch.fetch("https://dispatch/release-driver", {
           method: "POST",
           body: JSON.stringify({ driverId: payload.driverId })
         });
-        return next;
+        return json({ error: "no_open_rides" }, { status: 404 });
       }
-      const nextData = (await next.json()) as { rideId: string };
-      const rideId = nextData.rideId;
 
       await dispatch.fetch("https://dispatch/assign-driver", {
         method: "POST",
@@ -171,6 +201,34 @@ export default {
         status: "accepted",
         driverName: payload.driverName ?? "Driver"
       });
+    }
+
+    if (request.method === "GET" && url.pathname === "/rides/open") {
+      const dispatch = dispatchStub(env);
+      const open = await dispatch.fetch("https://dispatch/open-rides");
+      if (!open.ok) return open;
+      const entries = (await open.json()) as { rides: OpenRideEntry[] };
+      const rides: Array<{
+        rideId: string;
+        requestedAt: string;
+        expiresAt: string;
+        destinationText: string;
+        status: RideState["status"];
+      }> = [];
+      for (const entry of entries.rides) {
+        const stateRes = await roomStub(env, entry.rideId).fetch("https://room/state");
+        if (!stateRes.ok) continue;
+        const state = (await stateRes.json()) as RideState;
+        if (state.status !== "requested") continue;
+        rides.push({
+          rideId: state.rideId,
+          requestedAt: state.createdAt || entry.requestedAt,
+          expiresAt: state.expiresAt || entry.expiresAt,
+          destinationText: state.destinationText || "Destination not set",
+          status: state.status
+        });
+      }
+      return json({ rides });
     }
 
     const locationMatch = url.pathname.match(/^\/rides\/([^/]+)\/location$/);
@@ -364,7 +422,8 @@ export class RideRoom {
         ...this.stateData,
         ...data
       };
-      void this.state.storage.setAlarm(Date.now() + 2 * 60 * 60 * 1000);
+      const alarmAt = Date.parse(this.stateData.expiresAt || "");
+      void this.state.storage.setAlarm(Number.isNaN(alarmAt) ? Date.now() + 45 * 60 * 1000 : alarmAt);
       return json(this.stateData);
     }
 
@@ -376,6 +435,8 @@ export class RideRoom {
       this.stateData.status = "accepted";
       this.stateData.driverId = payload.driverId ?? this.stateData.driverId;
       this.stateData.driverName = payload.driverName ?? this.stateData.driverName;
+      this.stateData.expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+      void this.state.storage.setAlarm(Date.now() + 2 * 60 * 60 * 1000);
       this.broadcast({ type: "state", payload: this.stateData });
       return json(this.stateData);
     }
@@ -428,6 +489,12 @@ export class RideRoom {
   }
 
   async alarm(): Promise<void> {
+    if (this.stateData.status === "requested") {
+      this.stateData.status = "cancelled";
+      this.broadcast({ type: "state", payload: this.stateData });
+      this.closeSockets();
+      return;
+    }
     if (this.stateData.status !== "completed" && this.stateData.status !== "cancelled") {
       this.stateData.status = "completed";
       this.broadcast({ type: "state", payload: this.stateData });
@@ -465,20 +532,20 @@ export class DispatchHub {
     const url = new URL(request.url);
 
     if (request.method === "POST" && url.pathname === "/add-open") {
-      const body = (await request.json()) as { rideId: string };
-      const list = ((await this.state.storage.get("openRideIds")) as string[] | undefined) ?? [];
-      if (!list.includes(body.rideId)) {
-        list.push(body.rideId);
+      const body = (await request.json()) as OpenRideEntry;
+      const list = ((await this.state.storage.get("openRideEntries")) as OpenRideEntry[] | undefined) ?? [];
+      if (!list.find((entry) => entry.rideId === body.rideId)) {
+        list.push(body);
       }
-      await this.state.storage.put("openRideIds", list);
+      await this.state.storage.put("openRideEntries", list);
       return json({ ok: true, count: list.length });
     }
 
     if (request.method === "POST" && url.pathname === "/remove-open") {
       const body = (await request.json()) as { rideId: string };
-      const list = ((await this.state.storage.get("openRideIds")) as string[] | undefined) ?? [];
-      const nextList = list.filter((id) => id !== body.rideId);
-      await this.state.storage.put("openRideIds", nextList);
+      const list = ((await this.state.storage.get("openRideEntries")) as OpenRideEntry[] | undefined) ?? [];
+      const nextList = list.filter((entry) => entry.rideId !== body.rideId);
+      await this.state.storage.put("openRideEntries", nextList);
       return json({ ok: true, count: nextList.length });
     }
 
@@ -518,13 +585,26 @@ export class DispatchHub {
     }
 
     if (request.method === "GET" && url.pathname === "/next-open") {
-      const list = ((await this.state.storage.get("openRideIds")) as string[] | undefined) ?? [];
-      const rideId = list.shift();
-      if (!rideId) {
+      const now = Date.now();
+      const list = ((await this.state.storage.get("openRideEntries")) as OpenRideEntry[] | undefined) ?? [];
+      const valid = list.filter((entry) => Date.parse(entry.expiresAt) > now);
+      const next = valid.shift();
+      if (!next) {
+        await this.state.storage.put("openRideEntries", valid);
         return json({ error: "no_open_rides" }, { status: 404 });
       }
-      await this.state.storage.put("openRideIds", list);
-      return json({ rideId });
+      await this.state.storage.put("openRideEntries", valid);
+      return json({ rideId: next.rideId });
+    }
+
+    if (request.method === "GET" && url.pathname === "/open-rides") {
+      const now = Date.now();
+      const list = ((await this.state.storage.get("openRideEntries")) as OpenRideEntry[] | undefined) ?? [];
+      const valid = list.filter((entry) => Date.parse(entry.expiresAt) > now);
+      if (valid.length !== list.length) {
+        await this.state.storage.put("openRideEntries", valid);
+      }
+      return json({ rides: valid });
     }
 
     return json({ error: "not_found" }, { status: 404 });

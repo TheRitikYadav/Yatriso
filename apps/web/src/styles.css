@@ -176,6 +176,27 @@ button:disabled {
   border-bottom-color: rgba(191, 219, 254, 0.75);
 }
 
+.open-rides {
+  margin-top: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.open-ride-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.open-ride-item:first-of-type {
+  border-top: 0;
+}
+
 .meta {
   font-size: 13px;
   color: #cbd5e1;

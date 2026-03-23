@@ -20,6 +20,14 @@ type RideState = {
   expiresAt: string;
 };
 
+type OpenRide = {
+  rideId: string;
+  requestedAt: string;
+  expiresAt: string;
+  destinationText: string;
+  status: RideState["status"];
+};
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
   (typeof window !== "undefined" && window.location.hostname !== "localhost"
@@ -121,6 +129,17 @@ function getOrCreateDriverProfile(): DriverProfile {
   return profile;
 }
 
+function formatClock(iso: string) {
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return "Unknown";
+  return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function minutesLeft(iso: string) {
+  const ms = Date.parse(iso) - Date.now();
+  return Math.max(0, Math.ceil(ms / 60000));
+}
+
 function App() {
   const [role, setRole] = useState<Role | null>(null);
   const [rideId, setRideId] = useState("");
@@ -136,6 +155,8 @@ function App() {
   const [driverLocationName, setDriverLocationName] = useState("Waiting for driver");
   const [assignedDriverName, setAssignedDriverName] = useState("Waiting assignment");
   const [driverProfile, setDriverProfile] = useState<DriverProfile | null>(null);
+  const [openRides, setOpenRides] = useState<OpenRide[]>([]);
+  const [openRidesLoading, setOpenRidesLoading] = useState(false);
   const [status, setStatus] = useState<RideState["status"]>("requested");
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
@@ -144,6 +165,7 @@ function App() {
   const [mapError, setMapError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [requestedAt, setRequestedAt] = useState("");
 
   const mapRef = useRef<Map | null>(null);
   const mapRootRef = useRef<HTMLDivElement | null>(null);
@@ -196,6 +218,53 @@ function App() {
     return "";
   }, [driverLocation, riderLocation, destinationLocation]);
 
+  async function restoreRideFromSession(targetRole: Role, targetRideId: string) {
+    try {
+      const state = await requestJSON<RideState>(`/rides/${targetRideId}`);
+      setRideId(state.rideId);
+      setStatus(state.status);
+      setRequestedAt(state.createdAt || "");
+      setRiderLocation(state.riderLocation);
+      setDriverLocation(state.driverLocation);
+      setDestinationText(state.destinationText);
+      setDestinationLocation(state.destinationLocation);
+      setAssignedDriverName(state.driverName ?? "Waiting assignment");
+      connectRideSocket(state.rideId, targetRole);
+      if (targetRole === "rider") {
+        beginRiderLocationBroadcast(state.rideId);
+      } else if (state.status === "accepted") {
+        beginDriverLocationBroadcast(state.rideId);
+      }
+    } catch {
+      // Ignore stale session records.
+    }
+  }
+
+  async function loadOpenRides() {
+    if (role !== "driver") return;
+    try {
+      setOpenRidesLoading(true);
+      const response = await requestJSON<{ rides: OpenRide[] }>("/rides/open");
+      setOpenRides(response.rides);
+    } catch {
+      setOpenRides([]);
+    } finally {
+      setOpenRidesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const cachedRole = localStorage.getItem("yatriso_role");
+    if (cachedRole === "rider" || cachedRole === "driver") {
+      setRole(cachedRole);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!role) return;
+    localStorage.setItem("yatriso_role", role);
+  }, [role]);
+
   useEffect(() => {
     if (role === "driver") {
       setDriverProfile(getOrCreateDriverProfile());
@@ -203,6 +272,24 @@ function App() {
       setDriverProfile(null);
     }
   }, [role]);
+
+  useEffect(() => {
+    if (!role) return;
+    const key = `yatriso_active_ride_${role}`;
+    const cachedRideId = localStorage.getItem(key);
+    if (!cachedRideId) return;
+    void restoreRideFromSession(role, cachedRideId);
+  }, [role]);
+
+  useEffect(() => {
+    if (!role) return;
+    const key = `yatriso_active_ride_${role}`;
+    if (rideId && status !== "completed" && status !== "cancelled") {
+      localStorage.setItem(key, rideId);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }, [role, rideId, status]);
 
   useEffect(() => {
     if (status === "accepted" && previousStatusRef.current !== "accepted") {
@@ -463,6 +550,7 @@ function App() {
       );
       setRideId(response.rideId);
       setStatus("requested");
+      setRequestedAt(new Date().toISOString());
       setAssignedDriverName("Waiting assignment");
       setNotice("Ride requested. Waiting for a driver.");
       connectRideSocket(response.rideId, "rider");
@@ -474,7 +562,7 @@ function App() {
     }
   }
 
-  async function acceptRide() {
+  async function acceptRide(selectedRideId?: string) {
     try {
       setError("");
       if (!driverLocation) {
@@ -485,7 +573,7 @@ function App() {
         setError("Driver profile is not ready. Change role to driver again.");
         return;
       }
-      let targetRideId = rideId.trim();
+      let targetRideId = selectedRideId?.trim() || rideId.trim();
       if (!targetRideId) {
         const next = await requestJSON<{ rideId: string; status: string; driverName?: string }>(
           "/rides/accept-next",
@@ -509,6 +597,7 @@ function App() {
         });
       }
       setStatus("accepted");
+      setOpenRides([]);
       setAssignedDriverName(driverProfile.name);
       setNotice(`You accepted ride ${targetRideId}.`);
       connectRideSocket(targetRideId, "driver");
@@ -568,6 +657,7 @@ function App() {
         | { type: "rider_location"; payload: { lat: number; lng: number } };
       if (message.type === "state") {
         setStatus(message.payload.status);
+        setRequestedAt(message.payload.createdAt || "");
         setDriverLocation(message.payload.driverLocation);
         setRiderLocation(message.payload.riderLocation);
         setDestinationText(message.payload.destinationText);
@@ -669,6 +759,18 @@ function App() {
   }, [role, rideId, status]);
 
   useEffect(() => {
+    if (role !== "driver" || !hasRequiredLocation || status === "accepted") {
+      if (role !== "driver") {
+        setOpenRides([]);
+      }
+      return;
+    }
+    void loadOpenRides();
+    const timer = window.setInterval(() => void loadOpenRides(), 15000);
+    return () => window.clearInterval(timer);
+  }, [role, hasRequiredLocation, status]);
+
+  useEffect(() => {
     return () => {
       socketRef.current?.close();
       stopLocationSharing();
@@ -731,12 +833,15 @@ function App() {
             ) : (
               <div className="meta">Step 2: Allow location permission to continue as Rider.</div>
             )}
+            {status === "requested" && rideId ? (
+              <div className="meta">Searching for driver...</div>
+            ) : null}
           </>
         ) : (
           <>
             <div className="row controls-row">
               <button onClick={useBrowserLocation}>Use my location</button>
-              <button onClick={acceptRide} disabled={!hasRequiredLocation}>
+              <button onClick={() => void acceptRide()} disabled={!hasRequiredLocation}>
                 Accept next ride
               </button>
               <button onClick={completeRide}>Complete ride</button>
@@ -746,6 +851,12 @@ function App() {
             </div>
             {!hasRequiredLocation ? (
               <div className="meta">Step 2: Allow location permission to continue as Driver.</div>
+            ) : null}
+            {hasRequiredLocation ? (
+              <div className="meta">
+                You will pick up from <strong>{riderLocationName}</strong> and drop at{" "}
+                <strong>{destinationName}</strong>.
+              </div>
             ) : null}
           </>
         )}
@@ -776,7 +887,31 @@ function App() {
               {distanceMeters !== null ? `${(distanceMeters / 1000).toFixed(1)} km` : "Calculating..."}
             </div>
           </div>
+          <div className="stat-card">
+            <div className="stat-label">Requested At</div>
+            <div className="stat-value">{requestedAt ? formatClock(requestedAt) : "Not requested yet"}</div>
+          </div>
         </div>
+        {role === "driver" && hasRequiredLocation && status !== "accepted" ? (
+          <div className="open-rides">
+            <div className="stat-label">Open Ride Requests</div>
+            {openRidesLoading ? <div className="meta">Loading open rides...</div> : null}
+            {!openRidesLoading && openRides.length === 0 ? (
+              <div className="meta">No open rides right now.</div>
+            ) : null}
+            {openRides.map((ride) => (
+              <div className="open-ride-item" key={ride.rideId}>
+                <div>
+                  <div className="stat-value">{ride.destinationText || "Destination not set"}</div>
+                  <div className="meta">
+                    Requested {formatClock(ride.requestedAt)} | Expires in {minutesLeft(ride.expiresAt)} min
+                  </div>
+                </div>
+                <button onClick={() => void acceptRide(ride.rideId)}>Accept this ride</button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {geocodeOptions.length > 0 ? (
           <div className="meta">
             Matches:{" "}
