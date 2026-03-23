@@ -139,6 +139,18 @@ button:disabled {
   box-shadow: 0 20px 40px rgba(2, 6, 23, 0.45);
 }
 
+.footer {
+  margin-top: 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  padding-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .meta {
   font-size: 13px;
   color: #cbd5e1;
