@@ -1,0 +1,281 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import maplibregl, { LngLatLike, Map, Marker } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+
+type Role = "rider" | "driver";
+
+type RideState = {
+  rideId: string;
+  status: "requested" | "accepted" | "completed";
+  riderLocation: { lat: number; lng: number } | null;
+  driverLocation: { lat: number; lng: number } | null;
+  destinationText: string;
+};
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8787";
+
+function wsUrlForRide(rideId: string, role: Role) {
+  const origin = API_BASE_URL.replace(/^http/, "ws");
+  return `${origin}/ws/ride/${rideId}?role=${role}`;
+}
+
+async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...init
+  });
+  if (!res.ok) {
+    throw new Error(`Request failed: ${res.status}`);
+  }
+  return (await res.json()) as T;
+}
+
+function App() {
+  const [role, setRole] = useState<Role>("rider");
+  const [rideId, setRideId] = useState("");
+  const [destinationText, setDestinationText] = useState("");
+  const [riderLocation, setRiderLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [driverLocation, setDriverLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [status, setStatus] = useState<RideState["status"]>("requested");
+  const [error, setError] = useState("");
+
+  const mapRef = useRef<Map | null>(null);
+  const mapRootRef = useRef<HTMLDivElement | null>(null);
+  const riderMarkerRef = useRef<Marker | null>(null);
+  const driverMarkerRef = useRef<Marker | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+
+  const center = useMemo<LngLatLike>(() => {
+    if (driverLocation) return [driverLocation.lng, driverLocation.lat];
+    if (riderLocation) return [riderLocation.lng, riderLocation.lat];
+    return [77.209, 28.6139];
+  }, [driverLocation, riderLocation]);
+
+  useEffect(() => {
+    if (!mapRootRef.current || mapRef.current) return;
+    const map = new maplibregl.Map({
+      container: mapRootRef.current,
+      style: "https://demotiles.maplibre.org/style.json",
+      center,
+      zoom: 11
+    });
+    map.addControl(new maplibregl.NavigationControl(), "top-right");
+    mapRef.current = map;
+    return () => map.remove();
+  }, [center]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    mapRef.current.flyTo({ center, zoom: 12, essential: true });
+  }, [center]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (riderLocation) {
+      if (!riderMarkerRef.current) {
+        riderMarkerRef.current = new maplibregl.Marker({ color: "#10b981" });
+        riderMarkerRef.current.setPopup(
+          new maplibregl.Popup().setText("Rider current location")
+        );
+      }
+      riderMarkerRef.current
+        .setLngLat([riderLocation.lng, riderLocation.lat])
+        .addTo(mapRef.current);
+    }
+  }, [riderLocation]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (driverLocation) {
+      if (!driverMarkerRef.current) {
+        driverMarkerRef.current = new maplibregl.Marker({ color: "#f59e0b" });
+        driverMarkerRef.current.setPopup(
+          new maplibregl.Popup().setText("Driver live location")
+        );
+      }
+      driverMarkerRef.current
+        .setLngLat([driverLocation.lng, driverLocation.lat])
+        .addTo(mapRef.current);
+    }
+  }, [driverLocation]);
+
+  async function useBrowserLocation() {
+    setError("");
+    if (!navigator.geolocation) {
+      setError("Geolocation is not available in this browser.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setRiderLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        });
+      },
+      () => setError("Unable to fetch your current location."),
+      { enableHighAccuracy: true, timeout: 10_000 }
+    );
+  }
+
+  async function createRide() {
+    try {
+      setError("");
+      if (!riderLocation) {
+        setError("Set rider current location first.");
+        return;
+      }
+      if (!destinationText.trim()) {
+        setError("Add destination text before requesting ride.");
+        return;
+      }
+      const response = await requestJSON<{ rideId: string; status: string }>(
+        "/rides",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            riderLocation,
+            destinationText
+          })
+        }
+      );
+      setRideId(response.rideId);
+      setStatus("requested");
+      connectRideSocket(response.rideId, "rider");
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function acceptRide() {
+    try {
+      setError("");
+      if (!rideId.trim()) {
+        setError("Enter ride ID to accept.");
+        return;
+      }
+      await requestJSON(`/rides/${rideId}/accept`, {
+        method: "POST"
+      });
+      setStatus("accepted");
+      connectRideSocket(rideId, "driver");
+      beginDriverLocationBroadcast(rideId);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  function connectRideSocket(targetRideId: string, socketRole: Role) {
+    socketRef.current?.close();
+    const socket = new WebSocket(wsUrlForRide(targetRideId, socketRole));
+    socket.onmessage = (evt) => {
+      const message = JSON.parse(evt.data) as
+        | { type: "state"; payload: RideState }
+        | { type: "driver_location"; payload: { lat: number; lng: number } };
+      if (message.type === "state") {
+        setStatus(message.payload.status);
+        setDriverLocation(message.payload.driverLocation);
+        setRiderLocation(message.payload.riderLocation);
+      }
+      if (message.type === "driver_location") {
+        setDriverLocation(message.payload);
+      }
+    };
+    socket.onerror = () => setError("Realtime socket error.");
+    socketRef.current = socket;
+  }
+
+  function beginDriverLocationBroadcast(targetRideId: string) {
+    if (!navigator.geolocation) return;
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+    }
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      async (position) => {
+        const coords = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+        setDriverLocation(coords);
+        try {
+          await requestJSON(`/rides/${targetRideId}/location`, {
+            method: "POST",
+            body: JSON.stringify(coords)
+          });
+        } catch {
+          // Non-fatal: UI still has last local location.
+        }
+      },
+      () => setError("Unable to watch driver location."),
+      { enableHighAccuracy: true, maximumAge: 5_000 }
+    );
+  }
+
+  useEffect(() => {
+    return () => {
+      socketRef.current?.close();
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <div className="container">
+      <div className="panel">
+        <h1>Yatriso</h1>
+        <p>No-signup, Cloudflare-first rider/driver foundation.</p>
+        <div className="row">
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as Role)}
+            aria-label="Select role"
+          >
+            <option value="rider">Rider</option>
+            <option value="driver">Driver</option>
+          </select>
+          <input
+            value={rideId}
+            onChange={(e) => setRideId(e.target.value)}
+            placeholder="Ride ID"
+          />
+          <span className="pill">{status}</span>
+        </div>
+      </div>
+
+      <div className="panel">
+        {role === "rider" ? (
+          <div className="row">
+            <button onClick={useBrowserLocation}>Use current location</button>
+            <input
+              value={destinationText}
+              onChange={(e) => setDestinationText(e.target.value)}
+              placeholder="Destination address"
+            />
+            <button onClick={createRide}>Request ride</button>
+          </div>
+        ) : (
+          <div className="row">
+            <button onClick={acceptRide}>Accept ride</button>
+          </div>
+        )}
+        <div className="meta">
+          Rider: {riderLocation ? `${riderLocation.lat}, ${riderLocation.lng}` : "n/a"} | Driver:{" "}
+          {driverLocation ? `${driverLocation.lat}, ${driverLocation.lng}` : "n/a"}
+        </div>
+        {error ? <div className="meta">Error: {error}</div> : null}
+      </div>
+
+      <div className="map" ref={mapRootRef} />
+    </div>
+  );
+}
+
+export default App;

@@ -1,0 +1,11 @@
+name = "yatriso-api"
+main = "src/index.ts"
+compatibility_date = "2026-03-22"
+
+[[durable_objects.bindings]]
+name = "RIDE_ROOM"
+class_name = "RideRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RideRoom"]
