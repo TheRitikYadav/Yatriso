@@ -1,5 +1,6 @@
 export interface Env {
   RIDE_ROOM: DurableObjectNamespace;
+  DISPATCH_HUB: DurableObjectNamespace;
 }
 
 type Coordinates = {
@@ -42,6 +43,11 @@ function roomStub(env: Env, rideId: string) {
   return env.RIDE_ROOM.get(id);
 }
 
+function dispatchStub(env: Env) {
+  const id = env.DISPATCH_HUB.idFromName("global-dispatch");
+  return env.DISPATCH_HUB.get(id);
+}
+
 function parseCoordinate(value: string | null): number | null {
   if (!value) return null;
   const parsed = Number(value);
@@ -81,6 +87,10 @@ export default {
           expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
         })
       });
+      await dispatchStub(env).fetch("https://dispatch/add-open", {
+        method: "POST",
+        body: JSON.stringify({ rideId })
+      });
       return json({ rideId, status: "requested" });
     }
 
@@ -88,7 +98,24 @@ export default {
     if (request.method === "POST" && acceptMatch) {
       const rideId = acceptMatch[1];
       const stub = roomStub(env, rideId);
+      await dispatchStub(env).fetch("https://dispatch/remove-open", {
+        method: "POST",
+        body: JSON.stringify({ rideId })
+      });
       return stub.fetch("https://room/accept", { method: "POST" });
+    }
+
+    if (request.method === "POST" && url.pathname === "/rides/accept-next") {
+      const dispatch = dispatchStub(env);
+      const next = await dispatch.fetch("https://dispatch/next-open");
+      if (!next.ok) {
+        return next;
+      }
+      const nextData = (await next.json()) as { rideId: string };
+      const rideId = nextData.rideId;
+      const stub = roomStub(env, rideId);
+      await stub.fetch("https://room/accept", { method: "POST" });
+      return json({ rideId, status: "accepted" });
     }
 
     const locationMatch = url.pathname.match(/^\/rides\/([^/]+)\/location$/);
@@ -124,6 +151,10 @@ export default {
     if (request.method === "POST" && completeMatch) {
       const rideId = completeMatch[1];
       const stub = roomStub(env, rideId);
+      await dispatchStub(env).fetch("https://dispatch/remove-open", {
+        method: "POST",
+        body: JSON.stringify({ rideId })
+      });
       return stub.fetch("https://room/complete", { method: "POST" });
     }
 
@@ -131,6 +162,10 @@ export default {
     if (request.method === "POST" && cancelMatch) {
       const rideId = cancelMatch[1];
       const stub = roomStub(env, rideId);
+      await dispatchStub(env).fetch("https://dispatch/remove-open", {
+        method: "POST",
+        body: JSON.stringify({ rideId })
+      });
       return stub.fetch("https://room/cancel", { method: "POST" });
     }
 
@@ -323,5 +358,43 @@ export class RideRoom {
       }
     }
     this.sockets.clear();
+  }
+}
+
+export class DispatchHub {
+  constructor(private readonly state: DurableObjectState) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (request.method === "POST" && url.pathname === "/add-open") {
+      const body = (await request.json()) as { rideId: string };
+      const list = ((await this.state.storage.get("openRideIds")) as string[] | undefined) ?? [];
+      if (!list.includes(body.rideId)) {
+        list.push(body.rideId);
+      }
+      await this.state.storage.put("openRideIds", list);
+      return json({ ok: true, count: list.length });
+    }
+
+    if (request.method === "POST" && url.pathname === "/remove-open") {
+      const body = (await request.json()) as { rideId: string };
+      const list = ((await this.state.storage.get("openRideIds")) as string[] | undefined) ?? [];
+      const nextList = list.filter((id) => id !== body.rideId);
+      await this.state.storage.put("openRideIds", nextList);
+      return json({ ok: true, count: nextList.length });
+    }
+
+    if (request.method === "GET" && url.pathname === "/next-open") {
+      const list = ((await this.state.storage.get("openRideIds")) as string[] | undefined) ?? [];
+      const rideId = list.shift();
+      if (!rideId) {
+        return json({ error: "no_open_rides" }, { status: 404 });
+      }
+      await this.state.storage.put("openRideIds", list);
+      return json({ rideId });
+    }
+
+    return json({ error: "not_found" }, { status: 404 });
   }
 }

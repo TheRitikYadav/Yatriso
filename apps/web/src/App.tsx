@@ -257,28 +257,6 @@ function App() {
     }
   }
 
-  async function joinRide() {
-    try {
-      setError("");
-      if (!rideId.trim()) {
-        setError("Enter ride ID first.");
-        return;
-      }
-      const state = await requestJSON<RideState>(`/rides/${rideId}`);
-      setStatus(state.status);
-      setRiderLocation(state.riderLocation);
-      setDriverLocation(state.driverLocation);
-      setDestinationText(state.destinationText);
-      setDestinationLocation(state.destinationLocation);
-      connectRideSocket(rideId, role);
-      if (role === "rider") {
-        beginRiderLocationBroadcast(rideId);
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
   async function createRide() {
     try {
       setError("");
@@ -312,16 +290,22 @@ function App() {
   async function acceptRide() {
     try {
       setError("");
-      if (!rideId.trim()) {
-        setError("Enter ride ID to accept.");
-        return;
+      let targetRideId = rideId.trim();
+      if (!targetRideId) {
+        const next = await requestJSON<{ rideId: string; status: string }>(
+          "/rides/accept-next",
+          { method: "POST" }
+        );
+        targetRideId = next.rideId;
+        setRideId(targetRideId);
+      } else {
+        await requestJSON(`/rides/${targetRideId}/accept`, {
+          method: "POST"
+        });
       }
-      await requestJSON(`/rides/${rideId}/accept`, {
-        method: "POST"
-      });
       setStatus("accepted");
-      connectRideSocket(rideId, "driver");
-      beginDriverLocationBroadcast(rideId);
+      connectRideSocket(targetRideId, "driver");
+      beginDriverLocationBroadcast(targetRideId);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -476,13 +460,8 @@ function App() {
             <option value="rider">Rider</option>
             <option value="driver">Driver</option>
           </select>
-          <input
-            value={rideId}
-            onChange={(e) => setRideId(e.target.value)}
-            placeholder="Ride ID"
-          />
-          <button onClick={joinRide}>Join ride</button>
           <span className={`pill status-${status}`}>{status}</span>
+          {rideId ? <span className="pill">Ride: {rideId}</span> : null}
         </div>
       </div>
 
@@ -507,7 +486,7 @@ function App() {
           </div>
         ) : (
           <div className="row controls-row">
-            <button onClick={acceptRide}>Accept ride</button>
+            <button onClick={acceptRide}>Accept next ride</button>
             <button onClick={completeRide}>Complete ride</button>
             <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
               Cancel ride
