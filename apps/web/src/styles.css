@@ -5,7 +5,7 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top, #1e293b, #0b1220 45%, #050914);
+  background: #0f172a;
   color: #e2e8f0;
 }
 
@@ -14,29 +14,27 @@ body {
 }
 
 .container {
-  max-width: 1040px;
+  max-width: 980px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 20px;
 }
 
 .panel {
-  background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
-  border: 1px solid rgba(71, 85, 105, 0.35);
-  border-radius: 16px;
-  padding: 18px;
-  margin-bottom: 14px;
-  box-shadow: 0 8px 32px rgba(2, 6, 23, 0.35);
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
 }
 
 h1 {
   margin: 0 0 6px;
-  font-size: 30px;
-  letter-spacing: 0.2px;
+  font-size: 28px;
 }
 
 p {
-  margin: 0 0 14px;
-  color: #a5b4fc;
+  margin: 0 0 10px;
+  color: #94a3b8;
 }
 
 .row {
@@ -49,29 +47,18 @@ input,
 select,
 button {
   border: 1px solid #334155;
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 10px 12px;
-  background: #0c1425;
+  background: #0b1220;
   color: #e2e8f0;
-  transition: border-color 150ms ease, transform 120ms ease, background-color 150ms ease;
 }
 
 input {
   min-width: 160px;
 }
 
-input:focus,
-select:focus,
-button:focus {
-  outline: none;
-  border-color: #60a5fa;
-}
-
 button {
   cursor: pointer;
-  background: linear-gradient(180deg, #1e3a8a, #1d4ed8);
-  border-color: #2563eb;
-  font-weight: 600;
 }
 
 button:disabled {
@@ -79,48 +66,24 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
 .map {
-  height: 460px;
-  border-radius: 16px;
+  height: 420px;
+  border-radius: 12px;
   overflow: hidden;
-  border: 1px solid rgba(71, 85, 105, 0.35);
-  box-shadow: 0 8px 32px rgba(2, 6, 23, 0.3);
+  border: 1px solid #1f2937;
 }
 
 .meta {
   font-size: 13px;
-  color: #cbd5e1;
+  color: #94a3b8;
   margin-top: 8px;
 }
 
-.status-chip {
+.pill {
   display: inline-block;
-  padding: 5px 10px;
+  padding: 3px 8px;
   border-radius: 999px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
+  background: #1d4ed8;
   font-size: 12px;
-  text-transform: capitalize;
-}
-
-.status-requested {
-  background: rgba(234, 179, 8, 0.15);
-  border: 1px solid rgba(234, 179, 8, 0.45);
-  color: #fef08a;
-}
-
-.status-accepted {
-  background: rgba(59, 130, 246, 0.15);
-  border: 1px solid rgba(59, 130, 246, 0.45);
-  color: #bfdbfe;
-}
-
-.status-completed {
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.45);
-  color: #a7f3d0;
+  margin-left: 8px;
 }

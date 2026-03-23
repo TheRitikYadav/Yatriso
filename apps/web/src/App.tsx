@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { LngLatLike, Map, Marker } from "maplibre-gl";
-import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 type Role = "rider" | "driver";
@@ -23,25 +22,6 @@ const API_BASE_URL =
   (typeof window !== "undefined" && window.location.hostname !== "localhost"
     ? "https://api.yatriso.com"
     : "http://127.0.0.1:8787");
-
-const MAP_STYLE: StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: "raster",
-      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
-      tileSize: 256,
-      attribution: "© OpenStreetMap contributors"
-    }
-  },
-  layers: [
-    {
-      id: "osm",
-      type: "raster",
-      source: "osm"
-    }
-  ]
-};
 
 function wsUrlForRide(rideId: string, role: Role) {
   const origin = API_BASE_URL.replace(/^http/, "ws");
@@ -88,7 +68,6 @@ function App() {
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const [mapReady, setMapReady] = useState(false);
   const [error, setError] = useState("");
 
   const mapRef = useRef<Map | null>(null);
@@ -110,19 +89,14 @@ function App() {
     if (!mapRootRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: mapRootRef.current,
-      style: MAP_STYLE,
+      style: "https://demotiles.maplibre.org/style.json",
       center,
       zoom: 11
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
-    map.on("load", () => setMapReady(true));
-    map.on("error", () => setError("Map failed to load. Please refresh the page."));
     mapRef.current = map;
-    return () => {
-      map.remove();
-      mapRef.current = null;
-    };
-  }, []);
+    return () => map.remove();
+  }, [center]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -428,7 +402,7 @@ function App() {
             placeholder="Ride ID"
           />
           <button onClick={joinRide}>Join</button>
-          <span className={`status-chip status-${status}`}>{status}</span>
+          <span className="pill">{status}</span>
         </div>
       </div>
 
@@ -474,9 +448,6 @@ function App() {
         {error ? <div className="meta">Error: {error}</div> : null}
       </div>
 
-      {!mapReady ? (
-        <div className="meta">Loading map...</div>
-      ) : null}
       <div className="map" ref={mapRootRef} />
     </div>
   );
