@@ -54,11 +54,10 @@ npm run dev:web
 
 ### 1) Deploy Worker API (one-time, then on changes)
 
-From repo root (both commands work):
+From repo root:
 
 ```bash
 npm run deploy:api
-npx wrangler deploy
 ```
 
 In Cloudflare dashboard, set route:
@@ -91,7 +90,6 @@ Set Pages custom domain:
 Use these exact values to avoid workspace deploy errors:
 
 - Workers deploy command: `npx wrangler deploy -c workers/api/wrangler.toml`
-- Alternative (with root config): `npx wrangler deploy`
 - Pages build command: `npm run build`
 - Pages output directory: `dist`
 
