@@ -42,6 +42,10 @@ function wsUrlForRide(rideId: string, role: Role) {
   return `${origin}/ws/ride/${rideId}?role=${role}`;
 }
 
+function toLatLng(coords: Coordinates) {
+  return `${coords.lat},${coords.lng}`;
+}
+
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -82,6 +86,7 @@ function App() {
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [mapError, setMapError] = useState("");
   const [error, setError] = useState("");
 
@@ -100,6 +105,37 @@ function App() {
     if (riderLocation) return [riderLocation.lng, riderLocation.lat];
     return [77.209, 28.6139];
   }, [driverLocation, destinationLocation, riderLocation]);
+
+  const googleMapsLink = useMemo(() => {
+    const params = new URLSearchParams({ api: "1", travelmode: "driving" });
+    if (driverLocation) {
+      params.set("origin", toLatLng(driverLocation));
+      if (destinationLocation) {
+        params.set("destination", toLatLng(destinationLocation));
+        if (riderLocation) {
+          params.set("waypoints", toLatLng(riderLocation));
+        }
+      } else if (riderLocation) {
+        params.set("destination", toLatLng(riderLocation));
+      } else {
+        return "";
+      }
+      return `https://www.google.com/maps/dir/?${params.toString()}`;
+    }
+
+    if (riderLocation && destinationLocation) {
+      params.set("origin", toLatLng(riderLocation));
+      params.set("destination", toLatLng(destinationLocation));
+      return `https://www.google.com/maps/dir/?${params.toString()}`;
+    }
+
+    if (riderLocation) {
+      params.set("destination", toLatLng(riderLocation));
+      return `https://www.google.com/maps/dir/?${params.toString()}`;
+    }
+
+    return "";
+  }, [driverLocation, riderLocation, destinationLocation]);
 
   useEffect(() => {
     if (!mapRootRef.current || mapRef.current) return;
@@ -431,6 +467,17 @@ function App() {
     }
   }
 
+  async function copyGoogleMapsLink() {
+    if (!googleMapsLink) return;
+    try {
+      await navigator.clipboard.writeText(googleMapsLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Unable to copy link.");
+    }
+  }
+
   useEffect(() => {
     if (role === "rider" && rideId && status === "accepted") {
       beginRiderLocationBroadcast(rideId);
@@ -529,6 +576,16 @@ function App() {
           <div className="meta">
             Matches:{" "}
             {geocodeOptions.slice(0, 3).map((item) => item.label).join(" | ")}
+          </div>
+        ) : null}
+        {googleMapsLink ? (
+          <div className="share-row">
+            <a className="maps-link" href={googleMapsLink} target="_blank" rel="noreferrer">
+              Open live Google Maps route
+            </a>
+            <button className="button-secondary" onClick={copyGoogleMapsLink}>
+              {copied ? "Copied" : "Copy link"}
+            </button>
           </div>
         ) : null}
         {error ? <div className="meta">Error: {error}</div> : null}

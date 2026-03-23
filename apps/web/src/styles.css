@@ -156,6 +156,26 @@ button:disabled {
   font-size: 12px;
 }
 
+.share-row {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.maps-link {
+  color: #93c5fd;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(147, 197, 253, 0.6);
+  padding-bottom: 1px;
+}
+
+.maps-link:hover {
+  color: #bfdbfe;
+  border-bottom-color: rgba(191, 219, 254, 0.75);
+}
+
 .meta {
   font-size: 13px;
   color: #cbd5e1;
