@@ -137,7 +137,6 @@ button:disabled {
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.25);
   box-shadow: 0 20px 40px rgba(2, 6, 23, 0.45);
-  background: #0b1220;
 }
 
 .footer {
