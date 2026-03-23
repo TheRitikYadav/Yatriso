@@ -13,6 +13,8 @@ type RideState = {
   status: "requested" | "accepted" | "completed" | "cancelled";
   riderLocation: Coordinates | null;
   driverLocation: Coordinates | null;
+  driverId: string | null;
+  driverName: string | null;
   destinationLocation: Coordinates | null;
   destinationText: string;
   createdAt: string;
@@ -81,6 +83,8 @@ export default {
           status: "requested",
           riderLocation: payload.riderLocation ?? null,
           driverLocation: null,
+          driverId: null,
+          driverName: null,
           destinationLocation: payload.destinationLocation ?? null,
           destinationText: payload.destinationText ?? "",
           createdAt: new Date().toISOString(),
@@ -98,24 +102,75 @@ export default {
     if (request.method === "POST" && acceptMatch) {
       const rideId = acceptMatch[1];
       const stub = roomStub(env, rideId);
+      const payload = (await request.json().catch(() => ({}))) as {
+        driverId?: string;
+        driverName?: string;
+      };
+      if (payload.driverId) {
+        const assign = await dispatchStub(env).fetch("https://dispatch/assign-driver", {
+          method: "POST",
+          body: JSON.stringify({ driverId: payload.driverId, rideId })
+        });
+        if (!assign.ok) return assign;
+      }
       await dispatchStub(env).fetch("https://dispatch/remove-open", {
         method: "POST",
         body: JSON.stringify({ rideId })
       });
-      return stub.fetch("https://room/accept", { method: "POST" });
+      return stub.fetch("https://room/accept", {
+        method: "POST",
+        body: JSON.stringify({
+          driverId: payload.driverId ?? null,
+          driverName: payload.driverName ?? null
+        })
+      });
     }
 
     if (request.method === "POST" && url.pathname === "/rides/accept-next") {
+      const payload = (await request.json().catch(() => ({}))) as {
+        driverId?: string;
+        driverName?: string;
+      };
+      if (!payload.driverId) {
+        return json({ error: "missing_driver_id" }, { status: 400 });
+      }
+
+      const assign = await dispatchStub(env).fetch("https://dispatch/assign-driver", {
+        method: "POST",
+        body: JSON.stringify({ driverId: payload.driverId, rideId: "pending" })
+      });
+      if (!assign.ok) return assign;
+
       const dispatch = dispatchStub(env);
       const next = await dispatch.fetch("https://dispatch/next-open");
       if (!next.ok) {
+        await dispatch.fetch("https://dispatch/release-driver", {
+          method: "POST",
+          body: JSON.stringify({ driverId: payload.driverId })
+        });
         return next;
       }
       const nextData = (await next.json()) as { rideId: string };
       const rideId = nextData.rideId;
+
+      await dispatch.fetch("https://dispatch/assign-driver", {
+        method: "POST",
+        body: JSON.stringify({ driverId: payload.driverId, rideId })
+      });
+
       const stub = roomStub(env, rideId);
-      await stub.fetch("https://room/accept", { method: "POST" });
-      return json({ rideId, status: "accepted" });
+      await stub.fetch("https://room/accept", {
+        method: "POST",
+        body: JSON.stringify({
+          driverId: payload.driverId ?? null,
+          driverName: payload.driverName ?? null
+        })
+      });
+      return json({
+        rideId,
+        status: "accepted",
+        driverName: payload.driverName ?? "Driver"
+      });
     }
 
     const locationMatch = url.pathname.match(/^\/rides\/([^/]+)\/location$/);
@@ -155,6 +210,10 @@ export default {
         method: "POST",
         body: JSON.stringify({ rideId })
       });
+      await dispatchStub(env).fetch("https://dispatch/release-by-ride", {
+        method: "POST",
+        body: JSON.stringify({ rideId })
+      });
       return stub.fetch("https://room/complete", { method: "POST" });
     }
 
@@ -163,6 +222,10 @@ export default {
       const rideId = cancelMatch[1];
       const stub = roomStub(env, rideId);
       await dispatchStub(env).fetch("https://dispatch/remove-open", {
+        method: "POST",
+        body: JSON.stringify({ rideId })
+      });
+      await dispatchStub(env).fetch("https://dispatch/release-by-ride", {
         method: "POST",
         body: JSON.stringify({ rideId })
       });
@@ -282,6 +345,8 @@ export class RideRoom {
     status: "requested",
     riderLocation: null,
     driverLocation: null,
+    driverId: null,
+    driverName: null,
     destinationLocation: null,
     destinationText: "",
     createdAt: "",
@@ -304,7 +369,13 @@ export class RideRoom {
     }
 
     if (request.method === "POST" && url.pathname === "/accept") {
+      const payload = (await request.json().catch(() => ({}))) as {
+        driverId?: string | null;
+        driverName?: string | null;
+      };
       this.stateData.status = "accepted";
+      this.stateData.driverId = payload.driverId ?? this.stateData.driverId;
+      this.stateData.driverName = payload.driverName ?? this.stateData.driverName;
       this.broadcast({ type: "state", payload: this.stateData });
       return json(this.stateData);
     }
@@ -409,6 +480,41 @@ export class DispatchHub {
       const nextList = list.filter((id) => id !== body.rideId);
       await this.state.storage.put("openRideIds", nextList);
       return json({ ok: true, count: nextList.length });
+    }
+
+    if (request.method === "POST" && url.pathname === "/assign-driver") {
+      const body = (await request.json()) as { driverId: string; rideId: string };
+      const assignments =
+        ((await this.state.storage.get("driverAssignments")) as Record<string, string> | undefined) ?? {};
+      const existingRideId = assignments[body.driverId];
+      if (existingRideId && existingRideId !== "pending" && existingRideId !== body.rideId) {
+        return json({ error: "driver_busy", rideId: existingRideId }, { status: 409 });
+      }
+      assignments[body.driverId] = body.rideId;
+      await this.state.storage.put("driverAssignments", assignments);
+      return json({ ok: true, rideId: body.rideId });
+    }
+
+    if (request.method === "POST" && url.pathname === "/release-driver") {
+      const body = (await request.json()) as { driverId: string };
+      const assignments =
+        ((await this.state.storage.get("driverAssignments")) as Record<string, string> | undefined) ?? {};
+      delete assignments[body.driverId];
+      await this.state.storage.put("driverAssignments", assignments);
+      return json({ ok: true });
+    }
+
+    if (request.method === "POST" && url.pathname === "/release-by-ride") {
+      const body = (await request.json()) as { rideId: string };
+      const assignments =
+        ((await this.state.storage.get("driverAssignments")) as Record<string, string> | undefined) ?? {};
+      for (const [driverId, assignedRideId] of Object.entries(assignments)) {
+        if (assignedRideId === body.rideId) {
+          delete assignments[driverId];
+        }
+      }
+      await this.state.storage.put("driverAssignments", assignments);
+      return json({ ok: true });
     }
 
     if (request.method === "GET" && url.pathname === "/next-open") {

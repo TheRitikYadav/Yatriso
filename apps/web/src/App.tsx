@@ -12,6 +12,8 @@ type RideState = {
   status: "requested" | "accepted" | "completed" | "cancelled";
   riderLocation: Coordinates | null;
   driverLocation: Coordinates | null;
+  driverId: string | null;
+  driverName: string | null;
   destinationLocation: Coordinates | null;
   destinationText: string;
   createdAt: string;
@@ -52,7 +54,18 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!res.ok) {
-    throw new Error(`Request failed: ${res.status}`);
+    let message = `Request failed: ${res.status}`;
+    try {
+      const payload = (await res.json()) as { error?: string; rideId?: string };
+      if (payload.error === "driver_busy" && payload.rideId) {
+        message = `driver_busy:${payload.rideId}`;
+      } else if (payload.error) {
+        message = payload.error;
+      }
+    } catch {
+      // Ignore parse errors and keep generic message.
+    }
+    throw new Error(message);
   }
   return (await res.json()) as T;
 }
@@ -88,6 +101,26 @@ function locationKey(coords: Coordinates | null) {
   return `${coords.lat.toFixed(3)},${coords.lng.toFixed(3)}`;
 }
 
+type DriverProfile = { id: string; name: string };
+
+function getOrCreateDriverProfile(): DriverProfile {
+  const cached = localStorage.getItem("yatriso_driver_profile");
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached) as DriverProfile;
+      if (parsed.id && parsed.name) return parsed;
+    } catch {
+      // Ignore parse failures.
+    }
+  }
+  const profile = {
+    id: crypto.randomUUID().slice(0, 8),
+    name: `Driver-${Math.floor(Math.random() * 900 + 100)}`
+  };
+  localStorage.setItem("yatriso_driver_profile", JSON.stringify(profile));
+  return profile;
+}
+
 function App() {
   const [role, setRole] = useState<Role | null>(null);
   const [rideId, setRideId] = useState("");
@@ -101,6 +134,8 @@ function App() {
   const [riderLocationName, setRiderLocationName] = useState("Not shared yet");
   const [driverLocation, setDriverLocation] = useState<Coordinates | null>(null);
   const [driverLocationName, setDriverLocationName] = useState("Waiting for driver");
+  const [assignedDriverName, setAssignedDriverName] = useState("Waiting assignment");
+  const [driverProfile, setDriverProfile] = useState<DriverProfile | null>(null);
   const [status, setStatus] = useState<RideState["status"]>("requested");
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
@@ -108,6 +143,7 @@ function App() {
   const [copied, setCopied] = useState(false);
   const [mapError, setMapError] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const mapRef = useRef<Map | null>(null);
   const mapRootRef = useRef<HTMLDivElement | null>(null);
@@ -117,6 +153,7 @@ function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const riderWatchIdRef = useRef<number | null>(null);
   const driverWatchIdRef = useRef<number | null>(null);
+  const previousStatusRef = useRef<RideState["status"]>("requested");
 
   const center = useMemo<LngLatLike>(() => {
     if (driverLocation) return [driverLocation.lng, driverLocation.lat];
@@ -158,6 +195,25 @@ function App() {
 
     return "";
   }, [driverLocation, riderLocation, destinationLocation]);
+
+  useEffect(() => {
+    if (role === "driver") {
+      setDriverProfile(getOrCreateDriverProfile());
+    } else if (role === "rider") {
+      setDriverProfile(null);
+    }
+  }, [role]);
+
+  useEffect(() => {
+    if (status === "accepted" && previousStatusRef.current !== "accepted") {
+      setNotice(
+        assignedDriverName && assignedDriverName !== "Waiting assignment"
+          ? `Ride accepted by ${assignedDriverName}`
+          : "Ride has been accepted."
+      );
+    }
+    previousStatusRef.current = status;
+  }, [status, assignedDriverName]);
 
   useEffect(() => {
     if (!mapRootRef.current || mapRef.current) return;
@@ -407,6 +463,8 @@ function App() {
       );
       setRideId(response.rideId);
       setStatus("requested");
+      setAssignedDriverName("Waiting assignment");
+      setNotice("Ride requested. Waiting for a driver.");
       connectRideSocket(response.rideId, "rider");
       beginRiderLocationBroadcast(response.rideId);
     } catch (err) {
@@ -423,24 +481,49 @@ function App() {
         setError("Driver location is required before accepting rides.");
         return;
       }
+      if (!driverProfile) {
+        setError("Driver profile is not ready. Change role to driver again.");
+        return;
+      }
       let targetRideId = rideId.trim();
       if (!targetRideId) {
-        const next = await requestJSON<{ rideId: string; status: string }>(
+        const next = await requestJSON<{ rideId: string; status: string; driverName?: string }>(
           "/rides/accept-next",
-          { method: "POST" }
+          {
+            method: "POST",
+            body: JSON.stringify({
+              driverId: driverProfile.id,
+              driverName: driverProfile.name
+            })
+          }
         );
         targetRideId = next.rideId;
         setRideId(targetRideId);
       } else {
         await requestJSON(`/rides/${targetRideId}/accept`, {
-          method: "POST"
+          method: "POST",
+          body: JSON.stringify({
+            driverId: driverProfile.id,
+            driverName: driverProfile.name
+          })
         });
       }
       setStatus("accepted");
+      setAssignedDriverName(driverProfile.name);
+      setNotice(`You accepted ride ${targetRideId}.`);
       connectRideSocket(targetRideId, "driver");
       beginDriverLocationBroadcast(targetRideId);
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      if (message.startsWith("driver_busy:")) {
+        const existingRideId = message.split(":")[1];
+        setRideId(existingRideId);
+        setNotice(`You already have an active ride: ${existingRideId}`);
+        connectRideSocket(existingRideId, "driver");
+        beginDriverLocationBroadcast(existingRideId);
+        return;
+      }
+      setError(message);
     }
   }
 
@@ -452,6 +535,7 @@ function App() {
       });
       setStatus("completed");
       setEtaMinutes(null);
+      setNotice("Ride completed.");
       stopLocationSharing();
       socketRef.current?.close();
     } catch (err) {
@@ -466,6 +550,7 @@ function App() {
         method: "POST"
       });
       setStatus("cancelled");
+      setNotice("Ride cancelled.");
       stopLocationSharing();
       socketRef.current?.close();
     } catch (err) {
@@ -488,6 +573,7 @@ function App() {
         setDestinationText(message.payload.destinationText);
         setDestinationLocation(message.payload.destinationLocation);
         setDestinationName(message.payload.destinationText || "Destination set");
+        setAssignedDriverName(message.payload.driverName ?? "Waiting assignment");
       }
       if (message.type === "driver_location") {
         setDriverLocation(message.payload);
@@ -621,34 +707,47 @@ function App() {
             Select role first, then tap <strong>Use my location</strong> to continue.
           </div>
         ) : role === "rider" ? (
-          <div className="row controls-row">
-            <button onClick={useBrowserLocation}>Use my location</button>
-            <input
-              value={destinationText}
-              onChange={(e) => setDestinationText(e.target.value)}
-              placeholder="Destination address"
-            />
-            <button onClick={geocodeDestination} disabled={loading || !hasRequiredLocation}>
-              {loading ? "Locating..." : "Locate destination"}
-            </button>
-            <button onClick={createRide} disabled={loading || !hasRequiredLocation}>
-              {loading ? "Requesting..." : "Request ride"}
-            </button>
-            <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
-              Cancel ride
-            </button>
-          </div>
+          <>
+            <div className="row controls-row">
+              <button onClick={useBrowserLocation}>Use my location</button>
+            </div>
+            {hasRequiredLocation ? (
+              <div className="row controls-row">
+                <input
+                  value={destinationText}
+                  onChange={(e) => setDestinationText(e.target.value)}
+                  placeholder="Destination address"
+                />
+                <button onClick={geocodeDestination} disabled={loading}>
+                  {loading ? "Locating..." : "Locate destination"}
+                </button>
+                <button onClick={createRide} disabled={loading}>
+                  {loading ? "Requesting..." : "Request ride"}
+                </button>
+                <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
+                  Cancel ride
+                </button>
+              </div>
+            ) : (
+              <div className="meta">Step 2: Allow location permission to continue as Rider.</div>
+            )}
+          </>
         ) : (
-          <div className="row controls-row">
-            <button onClick={useBrowserLocation}>Use my location</button>
-            <button onClick={acceptRide} disabled={!hasRequiredLocation}>
-              Accept next ride
-            </button>
-            <button onClick={completeRide}>Complete ride</button>
-            <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
-              Cancel ride
-            </button>
-          </div>
+          <>
+            <div className="row controls-row">
+              <button onClick={useBrowserLocation}>Use my location</button>
+              <button onClick={acceptRide} disabled={!hasRequiredLocation}>
+                Accept next ride
+              </button>
+              <button onClick={completeRide}>Complete ride</button>
+              <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
+                Cancel ride
+              </button>
+            </div>
+            {!hasRequiredLocation ? (
+              <div className="meta">Step 2: Allow location permission to continue as Driver.</div>
+            ) : null}
+          </>
         )}
         <div className="stats-grid">
           <div className="stat-card">
@@ -658,6 +757,10 @@ function App() {
           <div className="stat-card">
             <div className="stat-label">Driver</div>
             <div className="stat-value">{driverLocationName}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Assigned Driver</div>
+            <div className="stat-value">{assignedDriverName}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Destination</div>
@@ -690,6 +793,7 @@ function App() {
             </button>
           </div>
         ) : null}
+        {notice ? <div className="meta">{notice}</div> : null}
         {error ? <div className="meta">Error: {error}</div> : null}
       </div>
 
