@@ -103,7 +103,7 @@ function App() {
     if (driverLocation) return [driverLocation.lng, driverLocation.lat];
     if (destinationLocation) return [destinationLocation.lng, destinationLocation.lat];
     if (riderLocation) return [riderLocation.lng, riderLocation.lat];
-    return [77.209, 28.6139];
+    return [-97.0403, 32.8998];
   }, [driverLocation, destinationLocation, riderLocation]);
 
   const googleMapsLink = useMemo(() => {
