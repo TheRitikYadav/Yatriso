@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import maplibregl, { LngLatLike, Map, Marker, StyleSpecification } from "maplibre-gl";
+import maplibregl, { LngLatLike, Map, Marker } from "maplibre-gl";
+import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 type Role = "rider" | "driver";
