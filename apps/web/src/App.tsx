@@ -9,7 +9,7 @@ type Coordinates = { lat: number; lng: number };
 
 type RideState = {
   rideId: string;
-  status: "requested" | "accepted" | "completed";
+  status: "requested" | "accepted" | "completed" | "cancelled";
   riderLocation: Coordinates | null;
   driverLocation: Coordinates | null;
   destinationLocation: Coordinates | null;
@@ -91,7 +91,8 @@ function App() {
   const driverMarkerRef = useRef<Marker | null>(null);
   const destinationMarkerRef = useRef<Marker | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
-  const watchIdRef = useRef<number | null>(null);
+  const riderWatchIdRef = useRef<number | null>(null);
+  const driverWatchIdRef = useRef<number | null>(null);
 
   const center = useMemo<LngLatLike>(() => {
     if (driverLocation) return [driverLocation.lng, driverLocation.lat];
@@ -167,7 +168,7 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!rideId || status === "completed") return;
+    if (!rideId || status === "completed" || status === "cancelled") return;
     if (!riderLocation || !destinationLocation) return;
     const rider = riderLocation;
     const destination = destinationLocation;
@@ -222,6 +223,9 @@ function App() {
       () => setError("Unable to fetch your current location."),
       { enableHighAccuracy: true, timeout: 10_000 }
     );
+    if (role === "rider") {
+      beginRiderLocationBroadcast(rideId || undefined);
+    }
   }
 
   async function geocodeDestination() {
@@ -267,6 +271,9 @@ function App() {
       setDestinationText(state.destinationText);
       setDestinationLocation(state.destinationLocation);
       connectRideSocket(rideId, role);
+      if (role === "rider") {
+        beginRiderLocationBroadcast(rideId);
+      }
     } catch (err) {
       setError((err as Error).message);
     }
@@ -277,14 +284,6 @@ function App() {
       setError("");
       if (!riderLocation) {
         setError("Set rider current location first.");
-        return;
-      }
-      if (!destinationText.trim()) {
-        setError("Add destination text before requesting ride.");
-        return;
-      }
-      if (!destinationLocation) {
-        setError("Geocode destination before requesting ride.");
         return;
       }
       setLoading(true);
@@ -302,6 +301,7 @@ function App() {
       setRideId(response.rideId);
       setStatus("requested");
       connectRideSocket(response.rideId, "rider");
+      beginRiderLocationBroadcast(response.rideId);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -335,10 +335,22 @@ function App() {
       });
       setStatus("completed");
       setEtaMinutes(null);
+      stopLocationSharing();
       socketRef.current?.close();
-      if (watchIdRef.current !== null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function cancelRide() {
+    try {
+      if (!rideId) return;
+      await requestJSON(`/rides/${rideId}/cancel`, {
+        method: "POST"
+      });
+      setStatus("cancelled");
+      stopLocationSharing();
+      socketRef.current?.close();
     } catch (err) {
       setError((err as Error).message);
     }
@@ -350,7 +362,8 @@ function App() {
     socket.onmessage = (evt) => {
       const message = JSON.parse(evt.data) as
         | { type: "state"; payload: RideState }
-        | { type: "driver_location"; payload: { lat: number; lng: number } };
+        | { type: "driver_location"; payload: { lat: number; lng: number } }
+        | { type: "rider_location"; payload: { lat: number; lng: number } };
       if (message.type === "state") {
         setStatus(message.payload.status);
         setDriverLocation(message.payload.driverLocation);
@@ -361,17 +374,47 @@ function App() {
       if (message.type === "driver_location") {
         setDriverLocation(message.payload);
       }
+      if (message.type === "rider_location") {
+        setRiderLocation(message.payload);
+      }
     };
     socket.onerror = () => setError("Realtime socket error.");
     socketRef.current = socket;
   }
 
+  function beginRiderLocationBroadcast(targetRideId?: string) {
+    if (!navigator.geolocation) return;
+    if (riderWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(riderWatchIdRef.current);
+    }
+    riderWatchIdRef.current = navigator.geolocation.watchPosition(
+      async (position) => {
+        const coords = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+        setRiderLocation(coords);
+        if (!targetRideId) return;
+        try {
+          await requestJSON(`/rides/${targetRideId}/rider-location`, {
+            method: "POST",
+            body: JSON.stringify(coords)
+          });
+        } catch {
+          // Non-fatal and retried by next location update.
+        }
+      },
+      () => setError("Unable to watch rider location."),
+      { enableHighAccuracy: true, maximumAge: 5_000 }
+    );
+  }
+
   function beginDriverLocationBroadcast(targetRideId: string) {
     if (!navigator.geolocation) return;
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
+    if (driverWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(driverWatchIdRef.current);
     }
-    watchIdRef.current = navigator.geolocation.watchPosition(
+    driverWatchIdRef.current = navigator.geolocation.watchPosition(
       async (position) => {
         const coords = {
           lat: position.coords.latitude,
@@ -392,12 +435,28 @@ function App() {
     );
   }
 
+  function stopLocationSharing() {
+    if (!navigator.geolocation) return;
+    if (riderWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(riderWatchIdRef.current);
+      riderWatchIdRef.current = null;
+    }
+    if (driverWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(driverWatchIdRef.current);
+      driverWatchIdRef.current = null;
+    }
+  }
+
+  useEffect(() => {
+    if (role === "rider" && rideId && status === "accepted") {
+      beginRiderLocationBroadcast(rideId);
+    }
+  }, [role, rideId, status]);
+
   useEffect(() => {
     return () => {
       socketRef.current?.close();
-      if (watchIdRef.current !== null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
+      stopLocationSharing();
     };
   }, []);
 
@@ -442,11 +501,17 @@ function App() {
             <button onClick={createRide} disabled={loading}>
               {loading ? "Requesting..." : "Request ride"}
             </button>
+            <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
+              Cancel ride
+            </button>
           </div>
         ) : (
           <div className="row controls-row">
             <button onClick={acceptRide}>Accept ride</button>
             <button onClick={completeRide}>Complete ride</button>
+            <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
+              Cancel ride
+            </button>
           </div>
         )}
         <div className="stats-grid">

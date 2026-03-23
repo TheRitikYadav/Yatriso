@@ -9,7 +9,7 @@ type Coordinates = {
 
 type RideState = {
   rideId: string;
-  status: "requested" | "accepted" | "completed";
+  status: "requested" | "accepted" | "completed" | "cancelled";
   riderLocation: Coordinates | null;
   driverLocation: Coordinates | null;
   destinationLocation: Coordinates | null;
@@ -102,6 +102,17 @@ export default {
       });
     }
 
+    const riderLocationMatch = url.pathname.match(/^\/rides\/([^/]+)\/rider-location$/);
+    if (request.method === "POST" && riderLocationMatch) {
+      const rideId = riderLocationMatch[1];
+      const stub = roomStub(env, rideId);
+      const body = (await request.json()) as Coordinates;
+      return stub.fetch("https://room/rider-location", {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+    }
+
     const readMatch = url.pathname.match(/^\/rides\/([^/]+)$/);
     if (request.method === "GET" && readMatch) {
       const rideId = readMatch[1];
@@ -114,6 +125,13 @@ export default {
       const rideId = completeMatch[1];
       const stub = roomStub(env, rideId);
       return stub.fetch("https://room/complete", { method: "POST" });
+    }
+
+    const cancelMatch = url.pathname.match(/^\/rides\/([^/]+)\/cancel$/);
+    if (request.method === "POST" && cancelMatch) {
+      const rideId = cancelMatch[1];
+      const stub = roomStub(env, rideId);
+      return stub.fetch("https://room/cancel", { method: "POST" });
     }
 
     const wsMatch = url.pathname.match(/^\/ws\/ride\/([^/]+)$/);
@@ -238,8 +256,23 @@ export class RideRoom {
       return json({ ok: true });
     }
 
+    if (request.method === "POST" && url.pathname === "/rider-location") {
+      const data = (await request.json()) as Coordinates;
+      this.stateData.riderLocation = data;
+      this.broadcast({ type: "rider_location", payload: data });
+      this.broadcast({ type: "state", payload: this.stateData });
+      return json({ ok: true });
+    }
+
     if (request.method === "POST" && url.pathname === "/complete") {
       this.stateData.status = "completed";
+      this.broadcast({ type: "state", payload: this.stateData });
+      this.closeSockets();
+      return json(this.stateData);
+    }
+
+    if (request.method === "POST" && url.pathname === "/cancel") {
+      this.stateData.status = "cancelled";
       this.broadcast({ type: "state", payload: this.stateData });
       this.closeSockets();
       return json(this.stateData);
@@ -263,7 +296,7 @@ export class RideRoom {
   }
 
   async alarm(): Promise<void> {
-    if (this.stateData.status !== "completed") {
+    if (this.stateData.status !== "completed" && this.stateData.status !== "cancelled") {
       this.stateData.status = "completed";
       this.broadcast({ type: "state", payload: this.stateData });
     }
