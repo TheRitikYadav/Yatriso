@@ -28,6 +28,16 @@ type OpenRide = {
   status: RideState["status"];
 };
 
+type Screen =
+  | "role-select"
+  | "location-permission"
+  | "rider-destination"
+  | "rider-searching"
+  | "rider-active"
+  | "driver-available"
+  | "driver-active"
+  | "ride-done";
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
   (typeof window !== "undefined" && window.location.hostname !== "localhost"
@@ -71,7 +81,7 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
         message = payload.error;
       }
     } catch {
-      // Ignore parse errors and keep generic message.
+      // ignore
     }
     throw new Error(message);
   }
@@ -94,13 +104,8 @@ async function fetchETA(from: Coordinates, to: Coordinates) {
 }
 
 async function fetchLocationName(coords: Coordinates) {
-  const params = new URLSearchParams({
-    lat: String(coords.lat),
-    lng: String(coords.lng)
-  });
-  const response = await requestJSON<{ label: string }>(
-    `/reverse-geocode?${params.toString()}`
-  );
+  const params = new URLSearchParams({ lat: String(coords.lat), lng: String(coords.lng) });
+  const response = await requestJSON<{ label: string }>(`/reverse-geocode?${params.toString()}`);
   return response.label;
 }
 
@@ -118,7 +123,7 @@ function getOrCreateDriverProfile(): DriverProfile {
       const parsed = JSON.parse(cached) as DriverProfile;
       if (parsed.id && parsed.name) return parsed;
     } catch {
-      // Ignore parse failures.
+      // ignore
     }
   }
   const profile = {
@@ -146,14 +151,12 @@ function App() {
   const [destinationText, setDestinationText] = useState("");
   const [destinationLocation, setDestinationLocation] = useState<Coordinates | null>(null);
   const [destinationName, setDestinationName] = useState("Not set");
-  const [geocodeOptions, setGeocodeOptions] = useState<
-    Array<{ label: string; lat: number; lng: number }>
-  >([]);
+  const [geocodeOptions, setGeocodeOptions] = useState<Array<{ label: string; lat: number; lng: number }>>([]);
   const [riderLocation, setRiderLocation] = useState<Coordinates | null>(null);
-  const [riderLocationName, setRiderLocationName] = useState("Not shared yet");
+  const [riderLocationName, setRiderLocationName] = useState("Fetching...");
   const [driverLocation, setDriverLocation] = useState<Coordinates | null>(null);
   const [driverLocationName, setDriverLocationName] = useState("Waiting for driver");
-  const [assignedDriverName, setAssignedDriverName] = useState("Waiting assignment");
+  const [assignedDriverName, setAssignedDriverName] = useState("");
   const [driverProfile, setDriverProfile] = useState<DriverProfile | null>(null);
   const [openRides, setOpenRides] = useState<OpenRide[]>([]);
   const [openRidesLoading, setOpenRidesLoading] = useState(false);
@@ -162,10 +165,9 @@ function App() {
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [mapError, setMapError] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [requestedAt, setRequestedAt] = useState("");
+  const [locationGranted, setLocationGranted] = useState(false);
 
   const mapRef = useRef<Map | null>(null);
   const mapRootRef = useRef<HTMLDivElement | null>(null);
@@ -175,17 +177,32 @@ function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const riderWatchIdRef = useRef<number | null>(null);
   const driverWatchIdRef = useRef<number | null>(null);
-  const previousStatusRef = useRef<RideState["status"]>("requested");
 
-  const center = useMemo<LngLatLike>(() => {
+  const hasRequiredLocation = role === "rider" ? locationGranted && Boolean(riderLocation) : role === "driver" ? locationGranted && Boolean(driverLocation) : false;
+
+  const screen: Screen = useMemo((): Screen => {
+    if (!role) return "role-select";
+    if (!hasRequiredLocation) return "location-permission";
+    if (role === "rider") {
+      if (!rideId) return "rider-destination";
+      if (status === "requested") return "rider-searching";
+      if (status === "accepted") return "rider-active";
+      return "ride-done";
+    } else {
+      if (status === "accepted" && rideId) return "driver-active";
+      if (status === "completed" || status === "cancelled") return "ride-done";
+      return "driver-available";
+    }
+  }, [role, hasRequiredLocation, rideId, status]);
+
+  const showMap = screen === "rider-active" || screen === "driver-active";
+
+  const mapCenter = useMemo<LngLatLike>(() => {
     if (driverLocation) return [driverLocation.lng, driverLocation.lat];
-    if (destinationLocation) return [destinationLocation.lng, destinationLocation.lat];
     if (riderLocation) return [riderLocation.lng, riderLocation.lat];
+    if (destinationLocation) return [destinationLocation.lng, destinationLocation.lat];
     return [-97.0403, 32.8998];
-  }, [driverLocation, destinationLocation, riderLocation]);
-
-  const hasRequiredLocation =
-    role === "rider" ? Boolean(riderLocation) : role === "driver" ? Boolean(driverLocation) : false;
+  }, [driverLocation, riderLocation, destinationLocation]);
 
   const googleMapsLink = useMemo(() => {
     const params = new URLSearchParams({ api: "1", travelmode: "driving" });
@@ -193,9 +210,7 @@ function App() {
       params.set("origin", toLatLng(driverLocation));
       if (destinationLocation) {
         params.set("destination", toLatLng(destinationLocation));
-        if (riderLocation) {
-          params.set("waypoints", toLatLng(riderLocation));
-        }
+        if (riderLocation) params.set("waypoints", toLatLng(riderLocation));
       } else if (riderLocation) {
         params.set("destination", toLatLng(riderLocation));
       } else {
@@ -203,20 +218,15 @@ function App() {
       }
       return `https://www.google.com/maps/dir/?${params.toString()}`;
     }
-
     if (riderLocation && destinationLocation) {
       params.set("origin", toLatLng(riderLocation));
       params.set("destination", toLatLng(destinationLocation));
       return `https://www.google.com/maps/dir/?${params.toString()}`;
     }
-
-    if (riderLocation) {
-      params.set("destination", toLatLng(riderLocation));
-      return `https://www.google.com/maps/dir/?${params.toString()}`;
-    }
-
     return "";
   }, [driverLocation, riderLocation, destinationLocation]);
+
+  // ── Restore session ──────────────────────────────────────────────────────────
 
   async function restoreRideFromSession(targetRole: Role, targetRideId: string) {
     try {
@@ -228,15 +238,12 @@ function App() {
       setDriverLocation(state.driverLocation);
       setDestinationText(state.destinationText);
       setDestinationLocation(state.destinationLocation);
-      setAssignedDriverName(state.driverName ?? "Waiting assignment");
+      setAssignedDriverName(state.driverName ?? "");
       connectRideSocket(state.rideId, targetRole);
-      if (targetRole === "rider") {
-        beginRiderLocationBroadcast(state.rideId);
-      } else if (state.status === "accepted") {
-        beginDriverLocationBroadcast(state.rideId);
-      }
+      if (targetRole === "rider") beginRiderLocationBroadcast(state.rideId);
+      else if (state.status === "accepted") beginDriverLocationBroadcast(state.rideId);
     } catch {
-      // Ignore stale session records.
+      // stale session
     }
   }
 
@@ -253,22 +260,19 @@ function App() {
     }
   }
 
+  // ── Init effects ─────────────────────────────────────────────────────────────
+
   useEffect(() => {
     const cachedRole = localStorage.getItem("yatriso_role");
-    if (cachedRole === "rider" || cachedRole === "driver") {
-      setRole(cachedRole);
-    }
+    if (cachedRole === "rider" || cachedRole === "driver") setRole(cachedRole);
   }, []);
 
   useEffect(() => {
     if (!role) return;
     localStorage.setItem("yatriso_role", role);
-  }, [role]);
-
-  useEffect(() => {
     if (role === "driver") {
       setDriverProfile(getOrCreateDriverProfile());
-    } else if (role === "rider") {
+    } else {
       setDriverProfile(null);
     }
   }, [role]);
@@ -291,142 +295,102 @@ function App() {
     }
   }, [role, rideId, status]);
 
-  useEffect(() => {
-    if (status === "accepted" && previousStatusRef.current !== "accepted") {
-      setNotice(
-        assignedDriverName && assignedDriverName !== "Waiting assignment"
-          ? `Ride accepted by ${assignedDriverName}`
-          : "Ride has been accepted."
-      );
-    }
-    previousStatusRef.current = status;
-  }, [status, assignedDriverName]);
+  // ── Map lifecycle ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    if (!showMap) return;
     if (!mapRootRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: mapRootRef.current,
       style: MAP_STYLE,
-      center,
-      zoom: 11
+      center: mapCenter,
+      zoom: 12
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
-    map.on("error", () => setMapError("Map failed to load. Try refreshing once."));
     mapRef.current = map;
     return () => {
       map.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [showMap]);
 
   useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.flyTo({ center, zoom: 12, essential: true });
-  }, [center]);
+    if (!mapRef.current || !showMap) return;
+    mapRef.current.flyTo({ center: mapCenter, zoom: 13, essential: true });
+  }, [mapCenter, showMap]);
 
   useEffect(() => {
-    if (!mapRef.current) return;
-    if (riderLocation) {
-      if (!riderMarkerRef.current) {
-        riderMarkerRef.current = new maplibregl.Marker({ color: "#10b981" });
-        riderMarkerRef.current.setPopup(
-          new maplibregl.Popup().setText("Rider current location")
-        );
-      }
-      riderMarkerRef.current
-        .setLngLat([riderLocation.lng, riderLocation.lat])
-        .addTo(mapRef.current);
+    if (!mapRef.current || !riderLocation) return;
+    if (!riderMarkerRef.current) {
+      const el = document.createElement("div");
+      el.className = "marker-rider";
+      riderMarkerRef.current = new maplibregl.Marker({ element: el });
+      riderMarkerRef.current.setPopup(new maplibregl.Popup().setText("Pickup location"));
     }
-  }, [riderLocation]);
+    riderMarkerRef.current.setLngLat([riderLocation.lng, riderLocation.lat]).addTo(mapRef.current);
+  }, [riderLocation, showMap]);
 
   useEffect(() => {
-    if (!mapRef.current) return;
-    if (driverLocation) {
-      if (!driverMarkerRef.current) {
-        driverMarkerRef.current = new maplibregl.Marker({ color: "#f59e0b" });
-        driverMarkerRef.current.setPopup(
-          new maplibregl.Popup().setText("Driver live location")
-        );
-      }
-      driverMarkerRef.current
-        .setLngLat([driverLocation.lng, driverLocation.lat])
-        .addTo(mapRef.current);
+    if (!mapRef.current || !driverLocation) return;
+    if (!driverMarkerRef.current) {
+      const el = document.createElement("div");
+      el.className = "marker-driver";
+      riderMarkerRef.current = new maplibregl.Marker({ element: el });
+      driverMarkerRef.current = new maplibregl.Marker({ color: "#f59e0b" });
+      driverMarkerRef.current.setPopup(new maplibregl.Popup().setText("Driver"));
     }
-  }, [driverLocation]);
+    driverMarkerRef.current.setLngLat([driverLocation.lng, driverLocation.lat]).addTo(mapRef.current);
+  }, [driverLocation, showMap]);
 
   useEffect(() => {
     if (!mapRef.current || !destinationLocation) return;
     if (!destinationMarkerRef.current) {
       destinationMarkerRef.current = new maplibregl.Marker({ color: "#6366f1" });
-      destinationMarkerRef.current.setPopup(
-        new maplibregl.Popup().setText("Destination")
-      );
+      destinationMarkerRef.current.setPopup(new maplibregl.Popup().setText("Destination"));
     }
-    destinationMarkerRef.current
-      .setLngLat([destinationLocation.lng, destinationLocation.lat])
-      .addTo(mapRef.current);
-  }, [destinationLocation]);
+    destinationMarkerRef.current.setLngLat([destinationLocation.lng, destinationLocation.lat]).addTo(mapRef.current);
+  }, [destinationLocation, showMap]);
+
+  // ── Location name lookups ─────────────────────────────────────────────────────
 
   useEffect(() => {
     const key = locationKey(riderLocation);
-    if (!key) {
-      setRiderLocationName("Not shared yet");
-      return;
-    }
+    if (!key) { setRiderLocationName("Fetching..."); return; }
     let cancelled = false;
-    void fetchLocationName(riderLocation as Coordinates)
-      .then((label) => {
-        if (!cancelled) setRiderLocationName(label);
-      })
-      .catch(() => {
-        if (!cancelled) setRiderLocationName("Location available");
-      });
-    return () => {
-      cancelled = true;
-    };
+    void fetchLocationName(riderLocation as Coordinates).then((label) => {
+      if (!cancelled) setRiderLocationName(label);
+    }).catch(() => {
+      if (!cancelled) setRiderLocationName("Current location");
+    });
+    return () => { cancelled = true; };
   }, [riderLocation?.lat, riderLocation?.lng]);
 
   useEffect(() => {
     const key = locationKey(driverLocation);
-    if (!key) {
-      setDriverLocationName("Waiting for driver");
-      return;
-    }
+    if (!key) { setDriverLocationName("Waiting for driver"); return; }
     let cancelled = false;
-    void fetchLocationName(driverLocation as Coordinates)
-      .then((label) => {
-        if (!cancelled) setDriverLocationName(label);
-      })
-      .catch(() => {
-        if (!cancelled) setDriverLocationName("Driver location available");
-      });
-    return () => {
-      cancelled = true;
-    };
+    void fetchLocationName(driverLocation as Coordinates).then((label) => {
+      if (!cancelled) setDriverLocationName(label);
+    }).catch(() => {
+      if (!cancelled) setDriverLocationName("Driver nearby");
+    });
+    return () => { cancelled = true; };
   }, [driverLocation?.lat, driverLocation?.lng]);
 
   useEffect(() => {
-    if (destinationText.trim()) {
-      setDestinationName(destinationText.trim());
-      return;
-    }
+    if (destinationText.trim()) { setDestinationName(destinationText.trim()); return; }
     const key = locationKey(destinationLocation);
-    if (!key) {
-      setDestinationName("Not set");
-      return;
-    }
+    if (!key) { setDestinationName("Not set"); return; }
     let cancelled = false;
-    void fetchLocationName(destinationLocation as Coordinates)
-      .then((label) => {
-        if (!cancelled) setDestinationName(label);
-      })
-      .catch(() => {
-        if (!cancelled) setDestinationName("Destination set");
-      });
-    return () => {
-      cancelled = true;
-    };
+    void fetchLocationName(destinationLocation as Coordinates).then((label) => {
+      if (!cancelled) setDestinationName(label);
+    }).catch(() => {
+      if (!cancelled) setDestinationName("Destination set");
+    });
+    return () => { cancelled = true; };
   }, [destinationText, destinationLocation?.lat, destinationLocation?.lng]);
+
+  // ── ETA ───────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     let cancelled = false;
@@ -434,19 +398,13 @@ function App() {
     if (!riderLocation || !destinationLocation) return;
     const rider = riderLocation;
     const destination = destinationLocation;
-    async function computeRiderTrip() {
+    void (async () => {
       try {
         const eta = await fetchETA(rider, destination);
-        if (cancelled) return;
-        setDistanceMeters(eta.distanceMeters);
-      } catch {
-        // Keep UI alive when routing endpoint is temporarily unavailable.
-      }
-    }
-    void computeRiderTrip();
-    return () => {
-      cancelled = true;
-    };
+        if (!cancelled) setDistanceMeters(eta.distanceMeters);
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
   }, [rideId, status, riderLocation, destinationLocation]);
 
   useEffect(() => {
@@ -454,74 +412,79 @@ function App() {
     if (!rideId || !riderLocation || !driverLocation || status !== "accepted") return;
     const rider = riderLocation;
     const driver = driverLocation;
-    async function computeDriverETA() {
+    const compute = async () => {
       try {
         const eta = await fetchETA(driver, rider);
         setEtaMinutes(eta.etaMinutes);
-      } catch {
-        // Non-fatal, ETA can be temporarily unknown.
-      }
-    }
-    void computeDriverETA();
-    timer = window.setInterval(() => void computeDriverETA(), 20_000);
-    return () => {
-      if (timer) window.clearInterval(timer);
+      } catch { /* non-fatal */ }
     };
+    void compute();
+    timer = window.setInterval(() => void compute(), 20_000);
+    return () => { if (timer) window.clearInterval(timer); };
   }, [rideId, riderLocation, driverLocation, status]);
 
-  async function useBrowserLocation() {
-    setError("");
-    if (!role) {
-      setError("Choose Rider or Driver first.");
+  // ── Open rides polling ────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (role !== "driver" || !hasRequiredLocation || status === "accepted") {
+      if (role !== "driver") setOpenRides([]);
       return;
     }
+    void loadOpenRides();
+    const timer = window.setInterval(() => void loadOpenRides(), 15000);
+    return () => window.clearInterval(timer);
+  }, [role, hasRequiredLocation, status]);
+
+  useEffect(() => {
+    if (role === "rider" && rideId && status === "accepted") {
+      beginRiderLocationBroadcast(rideId);
+    }
+  }, [role, rideId, status]);
+
+  useEffect(() => {
+    return () => {
+      socketRef.current?.close();
+      stopLocationSharing();
+    };
+  }, []);
+
+  // ── Action handlers ───────────────────────────────────────────────────────────
+
+  async function grantLocation() {
+    setError("");
     if (!navigator.geolocation) {
       setError("Geolocation is not available in this browser.");
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const coords = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        };
+        const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
         if (role === "rider") {
           setRiderLocation(coords);
+          beginRiderLocationBroadcast(undefined);
         } else {
           setDriverLocation(coords);
         }
+        setLocationGranted(true);
       },
-      () => setError("Unable to fetch your current location."),
+      () => setError("Location access denied. Please allow location in your browser settings."),
       { enableHighAccuracy: true, timeout: 10_000 }
     );
-    if (role === "rider") {
-      beginRiderLocationBroadcast(rideId || undefined);
-    }
   }
 
   async function geocodeDestination() {
     try {
       setError("");
-      if (!destinationText.trim()) {
-        setError("Enter destination address first.");
-        return;
-      }
+      if (!destinationText.trim()) { setError("Enter destination address first."); return; }
       setLoading(true);
       const params = new URLSearchParams({ q: destinationText.trim() });
-      const response = await requestJSON<{
-        results: Array<{ label: string; lat: number; lng: number }>;
-      }>(`/geocode?${params.toString()}`);
+      const response = await requestJSON<{ results: Array<{ label: string; lat: number; lng: number }> }>(`/geocode?${params.toString()}`);
       setGeocodeOptions(response.results);
       if (response.results[0]) {
-        setDestinationLocation({
-          lat: response.results[0].lat,
-          lng: response.results[0].lng
-        });
+        setDestinationLocation({ lat: response.results[0].lat, lng: response.results[0].lng });
         setDestinationName(response.results[0].label);
       }
-      if (!response.results.length) {
-        setError("No matching destination found.");
-      }
+      if (!response.results.length) setError("No matching destination found.");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -532,27 +495,17 @@ function App() {
   async function createRide() {
     try {
       setError("");
-      if (!riderLocation) {
-        setError("Set rider current location first.");
-        return;
-      }
+      if (!riderLocation) { setError("Set your location first."); return; }
+      if (!destinationLocation) { setError("Search and confirm a destination first."); return; }
       setLoading(true);
-      const response = await requestJSON<{ rideId: string; status: string }>(
-        "/rides",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            riderLocation,
-            destinationText,
-            destinationLocation
-          })
-        }
-      );
+      const response = await requestJSON<{ rideId: string; status: string }>("/rides", {
+        method: "POST",
+        body: JSON.stringify({ riderLocation, destinationText, destinationLocation })
+      });
       setRideId(response.rideId);
       setStatus("requested");
       setRequestedAt(new Date().toISOString());
-      setAssignedDriverName("Waiting assignment");
-      setNotice("Ride requested. Waiting for a driver.");
+      setAssignedDriverName("");
       connectRideSocket(response.rideId, "rider");
       beginRiderLocationBroadcast(response.rideId);
     } catch (err) {
@@ -565,41 +518,25 @@ function App() {
   async function acceptRide(selectedRideId?: string) {
     try {
       setError("");
-      if (!driverLocation) {
-        setError("Driver location is required before accepting rides.");
-        return;
-      }
-      if (!driverProfile) {
-        setError("Driver profile is not ready. Change role to driver again.");
-        return;
-      }
-      let targetRideId = selectedRideId?.trim() || rideId.trim();
+      if (!driverLocation) { setError("Driver location required."); return; }
+      if (!driverProfile) { setError("Driver profile not ready."); return; }
+      let targetRideId = selectedRideId?.trim() || "";
       if (!targetRideId) {
-        const next = await requestJSON<{ rideId: string; status: string; driverName?: string }>(
-          "/rides/accept-next",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              driverId: driverProfile.id,
-              driverName: driverProfile.name
-            })
-          }
-        );
+        const next = await requestJSON<{ rideId: string }>("/rides/accept-next", {
+          method: "POST",
+          body: JSON.stringify({ driverId: driverProfile.id, driverName: driverProfile.name })
+        });
         targetRideId = next.rideId;
-        setRideId(targetRideId);
       } else {
         await requestJSON(`/rides/${targetRideId}/accept`, {
           method: "POST",
-          body: JSON.stringify({
-            driverId: driverProfile.id,
-            driverName: driverProfile.name
-          })
+          body: JSON.stringify({ driverId: driverProfile.id, driverName: driverProfile.name })
         });
       }
+      setRideId(targetRideId);
       setStatus("accepted");
       setOpenRides([]);
       setAssignedDriverName(driverProfile.name);
-      setNotice(`You accepted ride ${targetRideId}.`);
       connectRideSocket(targetRideId, "driver");
       beginDriverLocationBroadcast(targetRideId);
     } catch (err) {
@@ -607,7 +544,7 @@ function App() {
       if (message.startsWith("driver_busy:")) {
         const existingRideId = message.split(":")[1];
         setRideId(existingRideId);
-        setNotice(`You already have an active ride: ${existingRideId}`);
+        setStatus("accepted");
         connectRideSocket(existingRideId, "driver");
         beginDriverLocationBroadcast(existingRideId);
         return;
@@ -619,12 +556,9 @@ function App() {
   async function completeRide() {
     try {
       if (!rideId) return;
-      await requestJSON(`/rides/${rideId}/complete`, {
-        method: "POST"
-      });
+      await requestJSON(`/rides/${rideId}/complete`, { method: "POST" });
       setStatus("completed");
       setEtaMinutes(null);
-      setNotice("Ride completed.");
       stopLocationSharing();
       socketRef.current?.close();
     } catch (err) {
@@ -635,11 +569,8 @@ function App() {
   async function cancelRide() {
     try {
       if (!rideId) return;
-      await requestJSON(`/rides/${rideId}/cancel`, {
-        method: "POST"
-      });
+      await requestJSON(`/rides/${rideId}/cancel`, { method: "POST" });
       setStatus("cancelled");
-      setNotice("Ride cancelled.");
       stopLocationSharing();
       socketRef.current?.close();
     } catch (err) {
@@ -653,8 +584,8 @@ function App() {
     socket.onmessage = (evt) => {
       const message = JSON.parse(evt.data) as
         | { type: "state"; payload: RideState }
-        | { type: "driver_location"; payload: { lat: number; lng: number } }
-        | { type: "rider_location"; payload: { lat: number; lng: number } };
+        | { type: "driver_location"; payload: Coordinates }
+        | { type: "rider_location"; payload: Coordinates };
       if (message.type === "state") {
         setStatus(message.payload.status);
         setRequestedAt(message.payload.createdAt || "");
@@ -662,83 +593,52 @@ function App() {
         setRiderLocation(message.payload.riderLocation);
         setDestinationText(message.payload.destinationText);
         setDestinationLocation(message.payload.destinationLocation);
-        setDestinationName(message.payload.destinationText || "Destination set");
-        setAssignedDriverName(message.payload.driverName ?? "Waiting assignment");
+        setDestinationName(message.payload.destinationText || "Destination");
+        setAssignedDriverName(message.payload.driverName ?? "");
       }
-      if (message.type === "driver_location") {
-        setDriverLocation(message.payload);
-      }
-      if (message.type === "rider_location") {
-        setRiderLocation(message.payload);
-      }
+      if (message.type === "driver_location") setDriverLocation(message.payload);
+      if (message.type === "rider_location") setRiderLocation(message.payload);
     };
-    socket.onerror = () => setError("Realtime socket error.");
     socketRef.current = socket;
   }
 
   function beginRiderLocationBroadcast(targetRideId?: string) {
     if (!navigator.geolocation) return;
-    if (riderWatchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(riderWatchIdRef.current);
-    }
+    if (riderWatchIdRef.current !== null) navigator.geolocation.clearWatch(riderWatchIdRef.current);
     riderWatchIdRef.current = navigator.geolocation.watchPosition(
       async (position) => {
-        const coords = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        };
+        const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
         setRiderLocation(coords);
         if (!targetRideId) return;
         try {
-          await requestJSON(`/rides/${targetRideId}/rider-location`, {
-            method: "POST",
-            body: JSON.stringify(coords)
-          });
-        } catch {
-          // Non-fatal and retried by next location update.
-        }
+          await requestJSON(`/rides/${targetRideId}/rider-location`, { method: "POST", body: JSON.stringify(coords) });
+        } catch { /* non-fatal */ }
       },
-      () => setError("Unable to watch rider location."),
+      () => {},
       { enableHighAccuracy: true, maximumAge: 5_000 }
     );
   }
 
   function beginDriverLocationBroadcast(targetRideId: string) {
     if (!navigator.geolocation) return;
-    if (driverWatchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(driverWatchIdRef.current);
-    }
+    if (driverWatchIdRef.current !== null) navigator.geolocation.clearWatch(driverWatchIdRef.current);
     driverWatchIdRef.current = navigator.geolocation.watchPosition(
       async (position) => {
-        const coords = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        };
+        const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
         setDriverLocation(coords);
         try {
-          await requestJSON(`/rides/${targetRideId}/location`, {
-            method: "POST",
-            body: JSON.stringify(coords)
-          });
-        } catch {
-          // Non-fatal: UI still has last local location.
-        }
+          await requestJSON(`/rides/${targetRideId}/location`, { method: "POST", body: JSON.stringify(coords) });
+        } catch { /* non-fatal */ }
       },
-      () => setError("Unable to watch driver location."),
+      () => {},
       { enableHighAccuracy: true, maximumAge: 5_000 }
     );
   }
 
   function stopLocationSharing() {
     if (!navigator.geolocation) return;
-    if (riderWatchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(riderWatchIdRef.current);
-      riderWatchIdRef.current = null;
-    }
-    if (driverWatchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(driverWatchIdRef.current);
-      driverWatchIdRef.current = null;
-    }
+    if (riderWatchIdRef.current !== null) { navigator.geolocation.clearWatch(riderWatchIdRef.current); riderWatchIdRef.current = null; }
+    if (driverWatchIdRef.current !== null) { navigator.geolocation.clearWatch(driverWatchIdRef.current); driverWatchIdRef.current = null; }
   }
 
   async function copyGoogleMapsLink() {
@@ -746,198 +646,382 @@ function App() {
     try {
       await navigator.clipboard.writeText(googleMapsLink);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setError("Unable to copy link.");
-    }
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch { setError("Unable to copy link."); }
   }
 
-  useEffect(() => {
-    if (role === "rider" && rideId && status === "accepted") {
-      beginRiderLocationBroadcast(rideId);
-    }
-  }, [role, rideId, status]);
+  function resetToStart() {
+    setRideId("");
+    setStatus("requested");
+    setAssignedDriverName("");
+    setDriverLocation(null);
+    setDestinationText("");
+    setDestinationLocation(null);
+    setDestinationName("Not set");
+    setGeocodeOptions([]);
+    setEtaMinutes(null);
+    setDistanceMeters(null);
+    setRequestedAt("");
+    setError("");
+    socketRef.current?.close();
+    stopLocationSharing();
+  }
 
-  useEffect(() => {
-    if (role !== "driver" || !hasRequiredLocation || status === "accepted") {
-      if (role !== "driver") {
-        setOpenRides([]);
-      }
-      return;
-    }
-    void loadOpenRides();
-    const timer = window.setInterval(() => void loadOpenRides(), 15000);
-    return () => window.clearInterval(timer);
-  }, [role, hasRequiredLocation, status]);
+  // ── Render helpers ───────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    return () => {
-      socketRef.current?.close();
-      stopLocationSharing();
-    };
-  }, []);
-
-  return (
-    <div className="container">
-      <div className="panel hero">
-        <div>
-          <h1>Yatriso</h1>
-          <p>No-signup ride booking with live tracking and fast dispatch for work and college rides.</p>
-        </div>
-        <div className="row controls-row">
-          {!role ? (
-            <>
-              <button onClick={() => setRole("rider")}>I am Rider</button>
-              <button onClick={() => setRole("driver")}>I am Driver</button>
-            </>
-          ) : (
-            <>
-              <span className="pill">Role: {role}</span>
-              <button className="button-secondary" onClick={() => setRole(null)}>
-                Change role
-              </button>
-            </>
-          )}
-          <span className={`pill status-${status}`}>{status}</span>
-          {rideId ? <span className="pill">Ride: {rideId}</span> : null}
+  function renderRoleSelect() {
+    return (
+      <div className="fullscreen-page">
+        <div className="brand-mark">Y</div>
+        <h1 className="brand-title">Yatriso</h1>
+        <p className="brand-sub">Instant rides for college &amp; work travelers</p>
+        <div className="role-cards">
+          <button className="role-card" onClick={() => setRole("rider")}>
+            <span className="role-icon">🧳</span>
+            <span className="role-name">I need a ride</span>
+            <span className="role-desc">Find a driver going your way</span>
+          </button>
+          <button className="role-card" onClick={() => setRole("driver")}>
+            <span className="role-icon">🚗</span>
+            <span className="role-name">I'm a driver</span>
+            <span className="role-desc">Pick up passengers nearby</span>
+          </button>
         </div>
       </div>
+    );
+  }
 
-      <div className="panel">
-        {role === null ? (
-          <div className="meta">
-            Select role first, then tap <strong>Use my location</strong> to continue.
+  function renderLocationPermission() {
+    return (
+      <div className="fullscreen-page">
+        <div className="perm-icon">📍</div>
+        <h2 className="perm-title">Allow Location</h2>
+        <p className="perm-desc">
+          {role === "rider"
+            ? "Yatriso needs your location to find nearby drivers and show them where to pick you up."
+            : "Yatriso needs your location so riders can see where you are and track your arrival."}
+        </p>
+        {error ? <div className="error-box">{error}</div> : null}
+        <button className="btn-primary btn-large" onClick={grantLocation}>
+          Allow my location
+        </button>
+        <button className="btn-ghost" onClick={() => { setRole(null); setError(""); }}>
+          ← Change role
+        </button>
+      </div>
+    );
+  }
+
+  function renderRiderDestination() {
+    return (
+      <div className="app-page">
+        <header className="app-header">
+          <div className="header-role rider">Rider</div>
+          <span className="header-location">📍 {riderLocationName}</span>
+          <button className="btn-ghost-sm" onClick={() => { setRole(null); setLocationGranted(false); }}>Change</button>
+        </header>
+        <div className="destination-card">
+          <div className="dest-from">
+            <span className="dot dot-green" />
+            <span>{riderLocationName}</span>
           </div>
-        ) : role === "rider" ? (
-          <>
-            <div className="row controls-row">
-              <button onClick={useBrowserLocation}>Use my location</button>
-            </div>
-            {hasRequiredLocation ? (
-              <div className="row controls-row">
-                <input
-                  value={destinationText}
-                  onChange={(e) => setDestinationText(e.target.value)}
-                  placeholder="Destination address"
-                />
-                <button onClick={geocodeDestination} disabled={loading}>
-                  {loading ? "Locating..." : "Locate destination"}
-                </button>
-                <button onClick={createRide} disabled={loading}>
-                  {loading ? "Requesting..." : "Request ride"}
-                </button>
-                <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
-                  Cancel ride
-                </button>
-              </div>
-            ) : (
-              <div className="meta">Step 2: Allow location permission to continue as Rider.</div>
-            )}
-            {status === "requested" && rideId ? (
-              <div className="meta">Searching for driver...</div>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <div className="row controls-row">
-              <button onClick={useBrowserLocation}>Use my location</button>
-              <button onClick={() => void acceptRide()} disabled={!hasRequiredLocation}>
-                Accept next ride
+          <div className="dest-divider" />
+          <div className="dest-to">
+            <span className="dot dot-purple" />
+            <div className="dest-input-row">
+              <input
+                className="dest-input"
+                value={destinationText}
+                onChange={(e) => setDestinationText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void geocodeDestination()}
+                placeholder="Where do you want to go?"
+              />
+              <button className="btn-icon" onClick={geocodeDestination} disabled={loading}>
+                {loading ? "..." : "→"}
               </button>
-              <button onClick={completeRide}>Complete ride</button>
-              <button className="button-secondary" onClick={cancelRide} disabled={!rideId}>
-                Cancel ride
-              </button>
-            </div>
-            {!hasRequiredLocation ? (
-              <div className="meta">Step 2: Allow location permission to continue as Driver.</div>
-            ) : null}
-            {hasRequiredLocation ? (
-              <div className="meta">
-                You will pick up from <strong>{riderLocationName}</strong> and drop at{" "}
-                <strong>{destinationName}</strong>.
-              </div>
-            ) : null}
-          </>
-        )}
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-label">Rider</div>
-            <div className="stat-value">{riderLocationName}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Driver</div>
-            <div className="stat-value">{driverLocationName}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Assigned Driver</div>
-            <div className="stat-value">{assignedDriverName}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Destination</div>
-            <div className="stat-value">{destinationName}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Driver ETA</div>
-            <div className="stat-value">{etaMinutes !== null ? `${etaMinutes} min` : "Calculating..."}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Trip Distance</div>
-            <div className="stat-value">
-              {distanceMeters !== null ? `${(distanceMeters / 1000).toFixed(1)} km` : "Calculating..."}
             </div>
           </div>
-          <div className="stat-card">
-            <div className="stat-label">Requested At</div>
-            <div className="stat-value">{requestedAt ? formatClock(requestedAt) : "Not requested yet"}</div>
-          </div>
+          {geocodeOptions.length > 0 ? (
+            <div className="geocode-results">
+              {geocodeOptions.slice(0, 4).map((item) => (
+                <button
+                  key={`${item.lat},${item.lng}`}
+                  className="geocode-item"
+                  onClick={() => {
+                    setDestinationLocation({ lat: item.lat, lng: item.lng });
+                    setDestinationName(item.label);
+                    setDestinationText(item.label);
+                    setGeocodeOptions([]);
+                  }}
+                >
+                  <span className="dot dot-purple dot-sm" />
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
-        {role === "driver" && hasRequiredLocation && status !== "accepted" ? (
-          <div className="open-rides">
-            <div className="stat-label">Open Ride Requests</div>
-            {openRidesLoading ? <div className="meta">Loading open rides...</div> : null}
-            {!openRidesLoading && openRides.length === 0 ? (
-              <div className="meta">No open rides right now.</div>
-            ) : null}
-            {openRides.map((ride) => (
-              <div className="open-ride-item" key={ride.rideId}>
-                <div>
-                  <div className="stat-value">{ride.destinationText || "Destination not set"}</div>
-                  <div className="meta">
-                    Requested {formatClock(ride.requestedAt)} | Expires in {minutesLeft(ride.expiresAt)} min
-                  </div>
-                </div>
-                <button onClick={() => void acceptRide(ride.rideId)}>Accept this ride</button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-        {geocodeOptions.length > 0 ? (
-          <div className="meta">
-            Matches:{" "}
-            {geocodeOptions.slice(0, 3).map((item) => item.label).join(" | ")}
-          </div>
-        ) : null}
-        {googleMapsLink ? (
-          <div className="share-row">
-            <a className="maps-link" href={googleMapsLink} target="_blank" rel="noreferrer">
-              Open live Google Maps route
-            </a>
-            <button className="button-secondary" onClick={copyGoogleMapsLink}>
-              {copied ? "Copied" : "Copy link"}
+        {destinationLocation ? (
+          <div className="confirm-dest">
+            <div className="confirm-dest-name">
+              <strong>Going to:</strong> {destinationName}
+            </div>
+            <button className="btn-primary btn-large" onClick={createRide} disabled={loading}>
+              {loading ? "Requesting..." : "Request Ride"}
             </button>
           </div>
         ) : null}
-        {notice ? <div className="meta">{notice}</div> : null}
-        {error ? <div className="meta">Error: {error}</div> : null}
+        {error ? <div className="error-box">{error}</div> : null}
       </div>
+    );
+  }
 
-      <div className="map" ref={mapRootRef} />
-      {mapError ? <div className="meta">{mapError}</div> : null}
-      <footer className="footer">
-        <span>Yatriso</span>
-        <span>Live rides for college and work travelers</span>
-      </footer>
+  function renderRiderSearching() {
+    return (
+      <div className="app-page">
+        <header className="app-header">
+          <div className="header-role rider">Rider</div>
+          <button className="btn-ghost-sm" onClick={() => cancelRide().then(resetToStart)}>Cancel</button>
+        </header>
+        <div className="searching-card">
+          <div className="pulse-ring">
+            <div className="pulse-dot" />
+          </div>
+          <h2 className="searching-title">Finding your driver...</h2>
+          <p className="searching-sub">Hang tight, a driver will accept your ride soon.</p>
+          <div className="ride-summary">
+            <div className="route-row">
+              <span className="dot dot-green" />
+              <div>
+                <div className="route-label">Pickup</div>
+                <div className="route-value">{riderLocationName}</div>
+              </div>
+            </div>
+            <div className="route-line" />
+            <div className="route-row">
+              <span className="dot dot-purple" />
+              <div>
+                <div className="route-label">Destination</div>
+                <div className="route-value">{destinationName}</div>
+              </div>
+            </div>
+          </div>
+          {distanceMeters ? (
+            <div className="trip-meta">~{(distanceMeters / 1000).toFixed(1)} km trip</div>
+          ) : null}
+          {requestedAt ? (
+            <div className="trip-meta muted">Requested at {formatClock(requestedAt)} · expires in {minutesLeft(new Date(new Date(requestedAt).getTime() + 45 * 60000).toISOString())} min</div>
+          ) : null}
+        </div>
+        {error ? <div className="error-box">{error}</div> : null}
+      </div>
+    );
+  }
+
+  function renderRiderActive() {
+    return (
+      <div className="app-page map-page">
+        <header className="app-header floating">
+          <div className="header-role rider">Rider</div>
+          <div className="status-chip accepted">Driver on the way</div>
+          <button className="btn-ghost-sm danger" onClick={() => void cancelRide()}>Cancel ride</button>
+        </header>
+        <div className="map-fullscreen" ref={mapRootRef} />
+        <div className="bottom-sheet">
+          <div className="driver-info">
+            <div className="driver-avatar">{assignedDriverName ? assignedDriverName[0] : "D"}</div>
+            <div>
+              <div className="driver-name">{assignedDriverName || "Your driver"}</div>
+              <div className="driver-status">
+                {etaMinutes !== null ? `Arriving in ${etaMinutes} min` : "Calculating ETA..."}
+              </div>
+            </div>
+            <div className="eta-badge">{etaMinutes !== null ? `${etaMinutes} min` : "—"}</div>
+          </div>
+          <div className="route-summary">
+            <div className="route-row">
+              <span className="dot dot-green" />
+              <div>
+                <div className="route-label">Your location</div>
+                <div className="route-value">{riderLocationName}</div>
+              </div>
+            </div>
+            <div className="route-line" />
+            <div className="route-row">
+              <span className="dot dot-purple" />
+              <div>
+                <div className="route-label">Destination</div>
+                <div className="route-value">{destinationName}</div>
+              </div>
+            </div>
+          </div>
+          {googleMapsLink ? (
+            <div className="maps-row">
+              <a className="btn-maps" href={googleMapsLink} target="_blank" rel="noreferrer">
+                Open in Google Maps
+              </a>
+              <button className="btn-copy" onClick={copyGoogleMapsLink}>
+                {copied ? "✓ Copied" : "Copy link"}
+              </button>
+            </div>
+          ) : null}
+          {error ? <div className="error-box">{error}</div> : null}
+        </div>
+      </div>
+    );
+  }
+
+  function renderDriverAvailable() {
+    return (
+      <div className="app-page">
+        <header className="app-header">
+          <div className="header-role driver">Driver</div>
+          <span className="header-location">📍 {driverLocationName}</span>
+          <button className="btn-ghost-sm" onClick={() => { setRole(null); setLocationGranted(false); }}>Change</button>
+        </header>
+        <div className="rides-list-header">
+          <h2 className="rides-title">Available Rides</h2>
+          <button className="btn-refresh" onClick={() => void loadOpenRides()} disabled={openRidesLoading}>
+            {openRidesLoading ? "..." : "↻"}
+          </button>
+        </div>
+        {openRidesLoading && openRides.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-spinner" />
+            <p>Loading rides...</p>
+          </div>
+        ) : openRides.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">🔍</div>
+            <p>No rides available right now.</p>
+            <p className="muted">New requests appear automatically.</p>
+          </div>
+        ) : (
+          <div className="rides-list">
+            {openRides.map((ride) => (
+              <div className="ride-card" key={ride.rideId}>
+                <div className="ride-card-body">
+                  <div className="route-row">
+                    <span className="dot dot-purple" />
+                    <div>
+                      <div className="route-label">Destination</div>
+                      <div className="route-value">{ride.destinationText || "Not specified"}</div>
+                    </div>
+                  </div>
+                  <div className="ride-card-meta">
+                    <span>Requested {formatClock(ride.requestedAt)}</span>
+                    <span className={`expiry ${minutesLeft(ride.expiresAt) < 10 ? "expiry-urgent" : ""}`}>
+                      Expires in {minutesLeft(ride.expiresAt)} min
+                    </span>
+                  </div>
+                </div>
+                <button className="btn-accept" onClick={() => void acceptRide(ride.rideId)}>
+                  Accept
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {error ? <div className="error-box">{error}</div> : null}
+      </div>
+    );
+  }
+
+  function renderDriverActive() {
+    return (
+      <div className="app-page map-page">
+        <header className="app-header floating">
+          <div className="header-role driver">Driver</div>
+          <div className="status-chip accepted">Active ride</div>
+          <div className="header-actions">
+            <button className="btn-complete" onClick={() => void completeRide()}>Complete</button>
+            <button className="btn-ghost-sm danger" onClick={() => void cancelRide()}>Cancel</button>
+          </div>
+        </header>
+        <div className="map-fullscreen" ref={mapRootRef} />
+        <div className="bottom-sheet">
+          <div className="route-summary">
+            <div className="route-row">
+              <span className="dot dot-green dot-lg" />
+              <div>
+                <div className="route-label">Pick up rider at</div>
+                <div className="route-value strong">{riderLocationName}</div>
+              </div>
+            </div>
+            <div className="route-line" />
+            <div className="route-row">
+              <span className="dot dot-purple dot-lg" />
+              <div>
+                <div className="route-label">Drop off at</div>
+                <div className="route-value strong">{destinationName}</div>
+              </div>
+            </div>
+          </div>
+          {distanceMeters ? (
+            <div className="trip-meta">~{(distanceMeters / 1000).toFixed(1)} km trip</div>
+          ) : null}
+          {googleMapsLink ? (
+            <div className="maps-row">
+              <a className="btn-maps" href={googleMapsLink} target="_blank" rel="noreferrer">
+                Open in Google Maps
+              </a>
+              <button className="btn-copy" onClick={copyGoogleMapsLink}>
+                {copied ? "✓ Copied" : "Copy link"}
+              </button>
+            </div>
+          ) : null}
+          {error ? <div className="error-box">{error}</div> : null}
+        </div>
+      </div>
+    );
+  }
+
+  function renderRideDone() {
+    const isCompleted = status === "completed";
+    return (
+      <div className="fullscreen-page">
+        <div className="done-icon">{isCompleted ? "✅" : "❌"}</div>
+        <h2 className="done-title">{isCompleted ? "Ride Complete" : "Ride Cancelled"}</h2>
+        <p className="done-desc">
+          {isCompleted
+            ? (role === "rider" ? "You've arrived at your destination. Have a great day!" : "Ride completed. Great job!")
+            : "This ride was cancelled."}
+        </p>
+        {distanceMeters && isCompleted ? (
+          <div className="done-stat">{(distanceMeters / 1000).toFixed(1)} km trip</div>
+        ) : null}
+        {googleMapsLink && isCompleted ? (
+          <div className="maps-row centered">
+            <a className="btn-maps" href={googleMapsLink} target="_blank" rel="noreferrer">
+              View route on Google Maps
+            </a>
+            <button className="btn-copy" onClick={copyGoogleMapsLink}>
+              {copied ? "✓ Copied" : "Copy link"}
+            </button>
+          </div>
+        ) : null}
+        <button className="btn-primary btn-large" onClick={() => { resetToStart(); if (role === "rider") { /* stay as rider, go to destination screen */ } }}>
+          {role === "rider" ? "Book another ride" : "Find next ride"}
+        </button>
+        <button className="btn-ghost" onClick={() => { resetToStart(); setRole(null); setLocationGranted(false); }}>
+          Switch role
+        </button>
+      </div>
+    );
+  }
+
+  // ── Root render ───────────────────────────────────────────────────────────────
+
+  return (
+    <div className="app-root">
+      {screen === "role-select" && renderRoleSelect()}
+      {screen === "location-permission" && renderLocationPermission()}
+      {screen === "rider-destination" && renderRiderDestination()}
+      {screen === "rider-searching" && renderRiderSearching()}
+      {screen === "rider-active" && renderRiderActive()}
+      {screen === "driver-available" && renderDriverAvailable()}
+      {screen === "driver-active" && renderDriverActive()}
+      {screen === "ride-done" && renderRideDone()}
     </div>
   );
 }
