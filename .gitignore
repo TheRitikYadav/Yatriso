@@ -6,3 +6,5 @@ dist
 .wrangler
 coverage
 *.log
+*.tsbuildinfo
+apps/web/src/*.js
