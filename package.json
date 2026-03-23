@@ -8,6 +8,7 @@
     "workers/api"
   ],
   "scripts": {
+    "build": "npm run build:web",
     "dev:web": "npm run dev -w apps/web",
     "build:web": "npm run build -w apps/web",
     "dev:api": "wrangler dev -c workers/api/wrangler.toml",

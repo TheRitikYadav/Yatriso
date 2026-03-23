@@ -52,7 +52,7 @@ npm run dev:web
 
 ## Deploy and host on Cloudflare
 
-### 1) Deploy Worker API
+### 1) Deploy Worker API (one-time, then on changes)
 
 From repo root (both commands work):
 
@@ -63,7 +63,7 @@ npx wrangler deploy
 
 In Cloudflare dashboard, set route:
 
-- `api.yourdomain.com/*` -> `yatriso-api`
+- `api.yatriso.com/*` -> `yatriso-api`
 
 ### 2) Deploy Frontend with Pages
 
@@ -72,19 +72,19 @@ In Cloudflare Pages:
 - Connect GitHub repo: `TheRitikYadav/Yatriso`
 - Framework preset: `Vite`
 - Root directory: `/` (repo root)
-- Build command: `npm run build:web`
-- Build output directory: `apps/web/dist`
+- Build command: `npm run build`
+- Build output directory: `dist`
 - Environment variable:
-  - `VITE_API_BASE_URL=https://api.yourdomain.com` (or `https://api.yatriso.com`)
+  - `VITE_API_BASE_URL=https://api.yatriso.com`
 
 Set Pages custom domain:
 
-- `app.yourdomain.com`
+- `yatriso.com` (or `app.yatriso.com`)
 
 ### 3) DNS expected end state
 
-- `app.yourdomain.com` -> Cloudflare Pages project
-- `api.yourdomain.com` -> Worker route
+- `yatriso.com` -> Cloudflare Pages project
+- `api.yatriso.com` -> Worker route
 
 ## Cloudflare CI/CD command values
 
@@ -92,8 +92,8 @@ Use these exact values to avoid workspace deploy errors:
 
 - Workers deploy command: `npx wrangler deploy -c workers/api/wrangler.toml`
 - Alternative (with root config): `npx wrangler deploy`
-- Pages build command: `npm run build:web`
-- Pages output directory: `apps/web/dist`
+- Pages build command: `npm run build`
+- Pages output directory: `dist`
 
 ## Free API note
 
