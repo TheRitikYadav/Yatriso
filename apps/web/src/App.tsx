@@ -519,8 +519,8 @@ function App() {
       try {
         const n = new Notification("Yatriso — Driver accepted", {
           body,
-          icon: "/icon.svg",
-          badge: "/icon.svg",
+          icon: "/icon-192.png",
+          badge: "/icon-192.png",
           tag: `yatriso-ride-${rideId}`,
           requireInteraction: false
         });

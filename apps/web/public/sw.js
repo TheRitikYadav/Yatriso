@@ -1,5 +1,14 @@
-const CACHE = "yatriso-v2";
-const SHELL = ["/", "/index.html", "/manifest.json", "/icon.svg", "/sw.js"];
+const CACHE = "yatriso-v3";
+const SHELL = [
+  "/",
+  "/index.html",
+  "/manifest.json",
+  "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/apple-touch-icon.png",
+  "/sw.js"
+];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
