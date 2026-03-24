@@ -38,6 +38,12 @@ type Screen =
   | "driver-active"
   | "ride-done";
 
+/** Chrome / Edge install-to-home-screen prompt (avoid clashing with DOM lib) */
+type PwaInstallPrompt = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
   (typeof window !== "undefined" && window.location.hostname !== "localhost"
@@ -169,6 +175,20 @@ function App() {
   const [error, setError] = useState("");
   const [requestedAt, setRequestedAt] = useState("");
   const [locationGranted, setLocationGranted] = useState(false);
+  const [showAcceptedBanner, setShowAcceptedBanner] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<PwaInstallPrompt | null>(null);
+  const [installDismissed, setInstallDismissed] = useState(false);
+  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission | "unsupported">(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+  );
+  const prevStatusRef = useRef<RideState["status"]>("requested");
+  const notifiedRideIdRef = useRef("");
+  const notifySnapRef = useRef({
+    assignedDriverName: "",
+    googleMapsLink: "",
+    riderLocation: null as Coordinates | null,
+    destinationLocation: null as Coordinates | null
+  });
 
   const mapRef = useRef<Map | null>(null);
   const mapRootRef = useRef<HTMLDivElement | null>(null);
@@ -235,6 +255,13 @@ function App() {
     return "";
   }, [driverLocation, riderLocation, destinationLocation]);
 
+  notifySnapRef.current = {
+    assignedDriverName,
+    googleMapsLink,
+    riderLocation,
+    destinationLocation
+  };
+
   // ── Restore session ──────────────────────────────────────────────────────────
 
   async function restoreRideFromSession(targetRole: Role, targetRideId: string) {
@@ -272,6 +299,13 @@ function App() {
   // ── Init effects ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get("role");
+    if (fromUrl === "rider" || fromUrl === "driver") {
+      setRole(fromUrl);
+      window.history.replaceState({}, "", window.location.pathname || "/");
+      return;
+    }
     const cachedRole = localStorage.getItem("yatriso_role");
     if (cachedRole === "rider" || cachedRole === "driver") setRole(cachedRole);
   }, []);
@@ -446,6 +480,71 @@ function App() {
       beginRiderLocationBroadcast(rideId);
     }
   }, [role, rideId, status]);
+
+  // Show accepted banner when ride transitions to accepted for the rider.
+  useEffect(() => {
+    if (role === "rider" && status === "accepted" && prevStatusRef.current !== "accepted") {
+      setShowAcceptedBanner(true);
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        try {
+          navigator.vibrate(120);
+        } catch {
+          // ignore
+        }
+      }
+    }
+    prevStatusRef.current = status;
+  }, [role, status]);
+
+  // System notification for rider when ride is accepted (Google Maps live route in-app).
+  useEffect(() => {
+    if (role !== "rider" || status !== "accepted" || !rideId) return;
+    if (notifiedRideIdRef.current === rideId) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+
+    const timer = window.setTimeout(() => {
+      if (notifiedRideIdRef.current === rideId) return;
+      notifiedRideIdRef.current = rideId;
+      const snap = notifySnapRef.current;
+      const name = snap.assignedDriverName.trim() || "Your driver";
+      const mapsUrl =
+        snap.googleMapsLink ||
+        (snap.riderLocation && snap.destinationLocation
+          ? `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${toLatLng(snap.riderLocation)}&destination=${toLatLng(snap.destinationLocation)}`
+          : "");
+      const body = mapsUrl
+        ? `${name} is on the way. Open Yatriso — tap "Open in Google Maps" for the same live route.`
+        : `${name} accepted your ride. Open Yatriso to follow the map.`;
+
+      try {
+        const n = new Notification("Yatriso — Driver accepted", {
+          body,
+          icon: "/icon.svg",
+          badge: "/icon.svg",
+          tag: `yatriso-ride-${rideId}`,
+          requireInteraction: false
+        });
+        n.onclick = () => {
+          window.focus();
+          n.close();
+        };
+      } catch {
+        // ignore
+      }
+    }, 800);
+
+    return () => window.clearTimeout(timer);
+  }, [role, status, rideId]);
+
+  // PWA: capture install prompt (Chrome / Edge / Android)
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e as PwaInstallPrompt);
+    };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -673,6 +772,10 @@ function App() {
 
   function resetToStart() {
     setRideId("");
+    committedStatusRef.current = "requested";
+    prevStatusRef.current = "requested";
+    notifiedRideIdRef.current = "";
+    setShowAcceptedBanner(false);
     setStatus("requested");
     setAssignedDriverName("");
     setDriverLocation(null);
@@ -688,26 +791,66 @@ function App() {
     stopLocationSharing();
   }
 
+  async function installPwa() {
+    if (!installPrompt) return;
+    try {
+      await installPrompt.prompt();
+      await installPrompt.userChoice;
+    } catch {
+      // ignore
+    } finally {
+      setInstallPrompt(null);
+    }
+  }
+
+  async function requestNotifyPermission() {
+    if (typeof Notification === "undefined") return;
+    try {
+      const result = await Notification.requestPermission();
+      setNotifyPermission(result);
+    } catch {
+      setNotifyPermission("denied");
+    }
+  }
+
   // ── Render helpers ───────────────────────────────────────────────────────────
 
   function renderRoleSelect() {
+    const showInstall = installPrompt && !installDismissed;
     return (
       <div className="fullscreen-page">
         <div className="brand-mark">Y</div>
         <h1 className="brand-title">Yatriso</h1>
         <p className="brand-sub">Instant rides for college &amp; work travelers</p>
+        {showInstall ? (
+          <div className="install-pwa-card">
+            <div className="install-pwa-text">
+              <strong>Add to Home Screen</strong>
+              <span>Install Yatriso like a mobile app for quick access.</span>
+            </div>
+            <div className="install-pwa-actions">
+              <button type="button" className="btn-primary btn-install" onClick={() => void installPwa()}>
+                Install
+              </button>
+              <button type="button" className="btn-ghost-sm" onClick={() => setInstallDismissed(true)}>
+                Not now
+              </button>
+            </div>
+          </div>
+        ) : null}
         <div className="role-cards">
-          <button className="role-card" onClick={() => setRole("rider")}>
+          <button type="button" className="role-card" onClick={() => setRole("rider")}>
             <span className="role-icon">🧳</span>
             <span className="role-name">I need a ride</span>
             <span className="role-desc">Find a driver going your way</span>
           </button>
-          <button className="role-card" onClick={() => setRole("driver")}>
+          <button type="button" className="role-card" onClick={() => setRole("driver")}>
             <span className="role-icon">🚗</span>
             <span className="role-name">I'm a driver</span>
             <span className="role-desc">Pick up passengers nearby</span>
           </button>
         </div>
+        <p className="pwa-hint">Tip: use your browser menu &quot;Add to Home Screen&quot; / &quot;Install app&quot; on iPhone or Android.</p>
       </div>
     );
   }
@@ -833,6 +976,19 @@ function App() {
           {requestedAt ? (
             <div className="trip-meta muted">Requested at {formatClock(requestedAt)} · expires in {minutesLeft(new Date(new Date(requestedAt).getTime() + 45 * 60000).toISOString())} min</div>
           ) : null}
+          {notifyPermission !== "unsupported" ? (
+            <div className="notify-row">
+              {notifyPermission === "default" ? (
+                <button type="button" className="btn-notify" onClick={() => void requestNotifyPermission()}>
+                  🔔 Notify me when a driver accepts
+                </button>
+              ) : notifyPermission === "granted" ? (
+                <span className="notify-ok">Notifications on — we’ll alert you when a driver accepts.</span>
+              ) : (
+                <span className="notify-muted">Notifications blocked — enable in browser settings for alerts.</span>
+              )}
+            </div>
+          ) : null}
         </div>
         {error ? <div className="error-box">{error}</div> : null}
       </div>
@@ -845,12 +1001,43 @@ function App() {
         <header className="app-header floating">
           <div className="header-role rider">Rider</div>
           <div className="status-chip accepted">Driver on the way</div>
-          <button className="btn-ghost-sm danger" onClick={() => void cancelRide()}>Cancel ride</button>
+          <button className="btn-ghost-sm danger" onClick={() => void cancelRide()}>Cancel</button>
         </header>
+
+        {/* Accepted notification banner — shown once when driver first accepts */}
+        {showAcceptedBanner ? (
+          <div className="accepted-banner">
+            <div className="accepted-banner-inner">
+              <div className="accepted-check">✓</div>
+              <div>
+                <div className="accepted-title">Ride Accepted!</div>
+                <div className="accepted-sub">
+                  {assignedDriverName ? `${assignedDriverName} is on the way` : "Your driver is on the way"}
+                </div>
+              </div>
+              <button className="accepted-close" onClick={() => setShowAcceptedBanner(false)}>✕</button>
+            </div>
+            {googleMapsLink ? (
+              <div className="maps-row" style={{ padding: "0 16px 14px" }}>
+                <a className="btn-maps" href={googleMapsLink} target="_blank" rel="noreferrer">
+                  Driver route (Google Maps)
+                </a>
+                <button type="button" className="btn-copy" onClick={copyGoogleMapsLink}>
+                  {copied ? "✓" : "Copy"}
+                </button>
+              </div>
+            ) : (
+              <p className="accepted-maps-wait" style={{ padding: "0 16px 14px" }}>
+                Live route link appears when your driver’s location is shared.
+              </p>
+            )}
+          </div>
+        ) : null}
+
         <div className="map-fullscreen" ref={mapRootRef} />
         <div className="bottom-sheet">
           <div className="driver-info">
-            <div className="driver-avatar">{assignedDriverName ? assignedDriverName[0] : "D"}</div>
+            <div className="driver-avatar">{assignedDriverName ? assignedDriverName[0].toUpperCase() : "D"}</div>
             <div>
               <div className="driver-name">{assignedDriverName || "Your driver"}</div>
               <div className="driver-status">
@@ -863,7 +1050,7 @@ function App() {
             <div className="route-row">
               <span className="dot dot-green" />
               <div>
-                <div className="route-label">Your location</div>
+                <div className="route-label">Your pickup</div>
                 <div className="route-value">{riderLocationName}</div>
               </div>
             </div>
@@ -894,7 +1081,7 @@ function App() {
 
   function renderDriverAvailable() {
     return (
-      <div className="app-page">
+      <div className="app-page driver-queue-page">
         <header className="app-header">
           <div className="header-role driver">Driver</div>
           <span className="header-location">📍 {driverLocationName}</span>
@@ -902,52 +1089,73 @@ function App() {
         </header>
         {error ? <div className="error-box error-top">{error}</div> : null}
         <div className="rides-list-header">
-          <h2 className="rides-title">Available Rides</h2>
+          <h2 className="rides-title">
+            Ride Requests
+            {openRides.length > 0 ? <span className="rides-badge">{openRides.length}</span> : null}
+          </h2>
           <button className="btn-refresh" onClick={() => void loadOpenRides()} disabled={openRidesLoading}>
-            {openRidesLoading ? "..." : "↻"}
+            {openRidesLoading ? <span className="empty-spinner sm" /> : "↻"}
           </button>
         </div>
         {openRidesLoading && openRides.length === 0 ? (
           <div className="empty-state">
             <div className="empty-spinner" />
-            <p>Loading rides...</p>
+            <p>Looking for rides...</p>
           </div>
         ) : openRides.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-icon">🔍</div>
-            <p>No rides available right now.</p>
-            <p className="muted">New requests appear automatically.</p>
+            <div className="empty-icon">🟢</div>
+            <p>You're online. Waiting for ride requests.</p>
+            <p className="muted">New requests appear here automatically every 15 s.</p>
           </div>
         ) : (
           <div className="rides-list">
-            {openRides.map((ride) => (
-              <div className="ride-card" key={ride.rideId}>
-                <div className="ride-card-body">
+            {openRides.map((ride, i) => (
+              <div className={`ride-alert-card ${i === 0 ? "ride-alert-card--top" : ""}`} key={ride.rideId}>
+                <div className="ride-alert-header">
+                  <span className="ride-alert-new">NEW REQUEST</span>
+                  <span className={`expiry ${minutesLeft(ride.expiresAt) < 10 ? "expiry-urgent" : ""}`}>
+                    {minutesLeft(ride.expiresAt)} min left
+                  </span>
+                </div>
+                <div className="ride-alert-route">
                   <div className="route-row">
-                    <span className="dot dot-purple" />
+                    <span className="dot dot-purple dot-lg" />
                     <div>
-                      <div className="route-label">Destination</div>
-                      <div className="route-value">{ride.destinationText || "Not specified"}</div>
+                      <div className="route-label">Drop off at</div>
+                      <div className="route-value strong">{ride.destinationText || "Not specified"}</div>
                     </div>
                   </div>
-                  <div className="ride-card-meta">
-                    <span>Requested {formatClock(ride.requestedAt)}</span>
-                    <span className={`expiry ${minutesLeft(ride.expiresAt) < 10 ? "expiry-urgent" : ""}`}>
-                      Expires in {minutesLeft(ride.expiresAt)} min
-                    </span>
-                  </div>
                 </div>
-                <button
-                  className="btn-accept"
-                  onClick={() => void acceptRide(ride.rideId)}
-                  disabled={accepting}
-                >
-                  {accepting ? "..." : "Accept"}
-                </button>
+                <div className="ride-alert-footer">
+                  <span className="ride-alert-time">Requested at {formatClock(ride.requestedAt)}</span>
+                  <button
+                    className="btn-accept-big"
+                    onClick={() => void acceptRide(ride.rideId)}
+                    disabled={accepting}
+                  >
+                    {accepting ? <span className="empty-spinner sm" /> : "Accept Ride"}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
+        <div className="driver-bottom-bar safe-bottom">
+          <button
+            type="button"
+            className="btn-accept-next-full"
+            onClick={() => void acceptRide()}
+            disabled={accepting || openRidesLoading || openRides.length === 0}
+          >
+            {accepting ? <span className="empty-spinner sm" /> : "Accept next ride"}
+          </button>
+          <p className="driver-bottom-hint">
+            {openRides.length === 0 && !openRidesLoading
+              ? "No requests in queue — stay online."
+              : "Grabs the oldest request, or use Accept on a card."}
+          </p>
+        </div>
       </div>
     );
   }
@@ -965,6 +1173,10 @@ function App() {
         </header>
         <div className="map-fullscreen" ref={mapRootRef} />
         <div className="bottom-sheet">
+          <div className="accepted-confirm-row">
+            <div className="accepted-check sm">✓</div>
+            <span className="accepted-confirm-text">Ride accepted — navigate now</span>
+          </div>
           <div className="route-summary">
             <div className="route-row">
               <span className="dot dot-green dot-lg" />
@@ -987,11 +1199,11 @@ function App() {
           ) : null}
           {googleMapsLink ? (
             <div className="maps-row">
-              <a className="btn-maps" href={googleMapsLink} target="_blank" rel="noreferrer">
-                Open in Google Maps
+              <a className="btn-maps maps-primary" href={googleMapsLink} target="_blank" rel="noreferrer">
+                Navigate with Google Maps
               </a>
               <button className="btn-copy" onClick={copyGoogleMapsLink}>
-                {copied ? "✓ Copied" : "Copy link"}
+                {copied ? "✓" : "Copy"}
               </button>
             </div>
           ) : null}

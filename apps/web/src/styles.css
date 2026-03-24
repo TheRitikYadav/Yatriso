@@ -740,6 +740,347 @@ body {
   height: 30px !important;
 }
 
+/* ── Accepted banner (rider) ─────────────────────────────────────────────────── */
+
+.accepted-banner {
+  position: fixed;
+  top: 56px;
+  left: 0;
+  right: 0;
+  z-index: 25;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(59, 130, 246, 0.14));
+  border-bottom: 1px solid rgba(16, 185, 129, 0.35);
+  backdrop-filter: blur(12px);
+}
+
+.accepted-banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 10px;
+}
+
+.accepted-check {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.25);
+  border: 2px solid rgba(16, 185, 129, 0.5);
+  color: #6ee7b7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.accepted-check.sm {
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+}
+
+.accepted-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #6ee7b7;
+}
+
+.accepted-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.accepted-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ── Driver accepted confirmation row ────────────────────────────────────────── */
+
+.accepted-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.accepted-confirm-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #6ee7b7;
+}
+
+/* ── Ride alert cards (driver available) ─────────────────────────────────────── */
+
+.rides-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--accent);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.ride-alert-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.ride-alert-card--top {
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1), 0 12px 32px rgba(2, 6, 23, 0.35);
+}
+
+.ride-alert-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px 6px;
+  background: rgba(59, 130, 246, 0.08);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.12);
+}
+
+.ride-alert-new {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #93c5fd;
+  text-transform: uppercase;
+}
+
+.ride-alert-route {
+  padding: 14px 16px 6px;
+}
+
+.ride-alert-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px 14px;
+  gap: 12px;
+}
+
+.ride-alert-time {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.btn-accept-big {
+  background: linear-gradient(180deg, var(--accent), var(--accent-dark));
+  border: none;
+  color: #fff;
+  padding: 12px 22px;
+  border-radius: 14px;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: filter 0.15s, transform 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+  justify-content: center;
+}
+
+.btn-accept-big:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-accept-big:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.maps-primary {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.28), rgba(59, 130, 246, 0.18));
+  border-color: rgba(59, 130, 246, 0.55);
+  color: #bfdbfe;
+  font-size: 15px;
+  padding: 13px 16px;
+}
+
+.empty-spinner.sm {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+  margin: 0;
+}
+
+/* ── Install PWA prompt ─────────────────────────────────────────────────────── */
+
+.install-pwa-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 14px 16px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 16px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.install-pwa-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.install-pwa-text strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.install-pwa-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-install {
+  width: auto;
+  padding: 10px 20px;
+  font-size: 14px;
+}
+
+.pwa-hint {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.75);
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* ── Rider: notify when accepted ─────────────────────────────────────────────── */
+
+.notify-row {
+  margin-top: 16px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.btn-notify {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-notify:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.notify-ok {
+  font-size: 13px;
+  color: #6ee7b7;
+}
+
+.notify-muted {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.accepted-maps-wait {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ── Driver: sticky accept next ──────────────────────────────────────────────── */
+
+.driver-queue-page {
+  padding-bottom: 120px;
+}
+
+.driver-bottom-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  padding: 12px 16px max(16px, env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, transparent, rgba(6, 13, 26, 0.96) 18%);
+  border-top: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+}
+
+.btn-accept-next-full {
+  width: 100%;
+  padding: 16px 20px;
+  border-radius: 16px;
+  border: none;
+  background: linear-gradient(180deg, var(--green), #059669);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 8px 28px rgba(16, 185, 129, 0.35);
+  transition: filter 0.15s, transform 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+}
+
+.btn-accept-next-full:hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.btn-accept-next-full:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.driver-bottom-hint {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.safe-bottom {
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+/* ── PWA safe area padding ───────────────────────────────────────────────────── */
+
+.bottom-sheet {
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
+}
+
+.app-header {
+  padding-top: max(14px, env(safe-area-inset-top));
+}
+
 /* ── Responsive ──────────────────────────────────────────────────────────────── */
 
 @media (max-width: 480px) {
