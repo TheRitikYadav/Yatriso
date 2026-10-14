@@ -1,98 +1,83 @@
-# Yatriso
+# Yatriso — Real-time Ride Coordination MVP
 
-Yatriso is a no-signup taxi platform MVP for college and work travelers, designed to run mostly on Cloudflare with ephemeral ride state.
+**TypeScript · React · Vite · Cloudflare Workers · Durable Objects**
 
-## Included apps
+Yatriso is a prototype for coordinating rides between travelers and drivers. It uses a web frontend and a Cloudflare Worker backend with Durable Objects for stateful, real-time ride sessions.
 
-- `apps/web` - React + Vite rider/driver web app
-- `workers/api` - Cloudflare Worker + Durable Object realtime backend
+## Architecture
 
-## Current MVP features
-
-- Rider: current location + destination address input
-- Destination geocoding via free OpenStreetMap Nominatim API
-- Ride request creation and ride ID sharing
-- Driver: join ride by ride ID, accept ride, send live location
-- Rider: live driver tracking and pickup ETA
-- Ride completion endpoint
-- Automatic ride expiry via Durable Object alarm (2 hours)
-
-## Local development
-
-### Install dependencies
-
-```bash
-npm install
+```text
+Rider / Driver (React + Vite)
+           |
+           v
+   Cloudflare Worker API
+           |
+           v
+ Durable Object per ride
+ (state, location, WebSocket)
+           |
+   Geocoding / routing API
 ```
 
-### Start backend (Worker)
+## Functionality represented in this repository
+
+- Riders enter origin/destination and create shareable ride requests.
+- Drivers can join via ride ID and accept a request.
+- Sessions support location updates and rider-side tracking.
+- Backend routes provide geocoding and estimated travel information.
+- Durable Object alarms expire ride state after two hours.
+
+This is an **MVP**, not a production taxi dispatch service. Payments, verified driver identity and production reliability are not established by the repository.
+
+## Code structure
+
+| Path | Description |
+| --- | --- |
+| `apps/web` | React and Vite frontend |
+| `workers/api` | Cloudflare Worker and Durable Object backend |
+| `.github` | Repository automation |
+
+## Development
 
 ```bash
+git clone https://github.com/TheRitikYadav/Yatriso.git
+cd Yatriso
+npm ci
 npm run dev:api
 ```
 
-### Start frontend
+Run the web frontend in a separate terminal:
 
 ```bash
 cp apps/web/.env.example apps/web/.env
 npm run dev:web
 ```
 
-## API routes
+Set the frontend API URL in the local environment file to your Worker development endpoint.
 
-- `GET /health`
-- `GET /geocode?q=address`
-- `GET /eta?fromLat=&fromLng=&toLat=&toLng=`
-- `POST /rides`
-- `GET /rides/:rideId`
-- `POST /rides/:rideId/accept`
-- `POST /rides/:rideId/location`
-- `POST /rides/:rideId/complete`
-- `GET /ws/ride/:rideId?role=rider|driver`
+## Important API paths
 
-## Deploy and host on Cloudflare
-
-### 1) Deploy Worker API (one-time, then on changes)
-
-From repo root:
-
-```bash
-npm run deploy:api
+```text
+GET  /health
+GET  /geocode?q=...
+GET  /eta?fromLat=...&fromLng=...&toLat=...&toLng=...
+POST /rides
+GET  /rides/:rideId
+POST /rides/:rideId/accept
+POST /rides/:rideId/location
+POST /rides/:rideId/complete
+GET  /ws/ride/:rideId?role=rider|driver
 ```
 
-In Cloudflare dashboard, set route:
+## Build and deployment
 
-- `api.yatriso.com/*` -> `yatriso-api`
+- Web build: `npm run build`
+- Worker local development: `npm run dev:api`
+- Worker deployment: `npm run deploy:api`
+- Wrangler config: `workers/api/wrangler.toml`
 
-### 2) Deploy Frontend with Pages
+Deployment requires an appropriately configured Cloudflare account, Worker route, Pages deployment, and environment variables. Example custom domains in configuration or documentation do **not** guarantee an active live deployment.
 
-In Cloudflare Pages:
+## Engineering takeaways
 
-- Connect GitHub repo: `TheRitikYadav/Yatriso`
-- Framework preset: `Vite`
-- Root directory: `/` (repo root)
-- Build command: `npm run build`
-- Build output directory: `dist`
-- Environment variable:
-  - `VITE_API_BASE_URL=https://api.yatriso.com`
-
-Set Pages custom domain:
-
-- `yatriso.com` (or `app.yatriso.com`)
-
-### 3) DNS expected end state
-
-- `yatriso.com` -> Cloudflare Pages project
-- `api.yatriso.com` -> Worker route
-
-## Cloudflare CI/CD command values
-
-Use these exact values to avoid workspace deploy errors:
-
-- Workers deploy command: `npx wrangler deploy -c workers/api/wrangler.toml`
-- Pages build command: `npm run build`
-- Pages output directory: `dist`
-
-## Free API note
-
-This MVP uses free public endpoints for geocoding and routing. They can be rate-limited. For production scale, move to managed or self-hosted geocoding/routing.
+This repository explores lightweight real-time state synchronization, API design, location data flow, and edge-hosted application architecture. For a production system, the next priorities would be tests, authentication, abuse controls, data retention policies, and failure handling.
